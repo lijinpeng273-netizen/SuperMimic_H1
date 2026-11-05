@@ -8,6 +8,7 @@ Hook usage (see ``mjlab/managers/recorder_manager.py``):
 * ``record_pre_reset(ids)``   terminal step: write the last transition row plus a *terminal* row
                               holding s_{T+1} with its termination label; qpos/qvel are final here
                               even though derived kinematics are one substep stale.
+作用是：在机器人与仿真环境交互时，收集状态、动作、奖励等数据，写入经验回放缓冲区，供世界模型和策略训练使用。
 """
 
 from __future__ import annotations
@@ -21,12 +22,13 @@ from mjlab.managers.recorder_manager import RecorderTerm, RecorderTermCfg
 from supermimic.data.replay_buffer import ReplayBuffer
 from supermimic.envs.sim_context import XI_DIM, SimContext
 from supermimic.envs.state_io import STATE_DIM, StateIO
+from supermimic.robot_dimensions import ACT_DIM
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
 
-class ReplayRecorder(RecorderTerm):
+class ReplayRecorder(RecorderTerm): # 实际执行的数据记录
     def __init__(self, cfg: ReplayRecorderCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg, env)
         p = cfg.params
@@ -35,7 +37,7 @@ class ReplayRecorder(RecorderTerm):
         self.command_name = p.get("command_name", "motion")
         self.action_name = p.get("action_name", "joint_pos")
         n = env.num_envs
-        self.buffer = ReplayBuffer(n, int(p["capacity"]), STATE_DIM, 29, XI_DIM, env.device)
+        self.buffer = ReplayBuffer(n, int(p["capacity"]), STATE_DIM, ACT_DIM, XI_DIM, env.device)
         self.prev_s = torch.zeros(n, STATE_DIM, device=env.device)
         self.prev_xi = torch.zeros(n, XI_DIM, device=env.device)
         self.prev_frame = torch.zeros(n, dtype=torch.long, device=env.device)
@@ -91,7 +93,7 @@ class ReplayRecorder(RecorderTerm):
         # Terminal row: the state reached by the last action (no transition out of it).
         cmd = self.command
         s_next = self.state_io.read()[env_ids]
-        zeros_a = torch.zeros(env_ids.numel(), 29, device=env.device)
+        zeros_a = torch.zeros(env_ids.numel(), ACT_DIM, device=env.device)
         self.buffer.add(
             env_ids,
             s=s_next,
@@ -122,4 +124,5 @@ class ReplayRecorder(RecorderTerm):
 @dataclass
 class ReplayRecorderCfg(RecorderTermCfg):
     func: type = ReplayRecorder
-    params: dict = field(default_factory=lambda: {"capacity": 1000, "foot_geom_regex": r"^(left|right)_foot[1-7]_collision$"})
+    # params: dict = field(default_factory=lambda: {"capacity": 1000, "foot_geom_regex": r"^(left|right)_foot[1-7]_collision$"})
+    params: dict = field(default_factory=lambda: {"capacity": 1000, "foot_geom_regex": r"^(left|right)_ankle_link_collision$"})

@@ -5,12 +5,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from supermimic.robot_dimensions import NJ, NQ, STATE_DIM, DELTA_DIM, XI_DIM, OBS_DIM, GOAL_FEAT_DIM
 
 ROOT = Path(__file__).resolve().parents[1]
-NPZ = ROOT / "data/npz/lafan1"
+NPZ = ROOT / "data/npz/h1"
 pytestmark = [
     pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA"),
-    pytest.mark.skipif(not NPZ.exists(), reason="LAFAN1 npz not built"),
+    pytest.mark.skipif(not NPZ.exists(), reason="H1 npz not built"),
 ]
 
 
@@ -19,7 +20,7 @@ def setup():
     torch.backends.cuda.matmul.allow_tf32 = False
     from mjlab.tasks.tracking import mdp as track_mdp
 
-    from supermimic.data.motion_convert import load_g1_model
+    from supermimic.robots.h1 import load_h1_model
     from supermimic.envs import SuperMimicEnvCfgArgs, make_env
     from supermimic.envs.mdp.motion_library import discover_npz
     from supermimic.envs.state_io import StateIO
@@ -27,12 +28,12 @@ def setup():
     from supermimic.kinematics.g1_fk import G1Kinematics
     from supermimic.world_model.heads import AnalyticHeads
 
-    files = discover_npz(NPZ, names=["walk1_subject1", "fight1_subject2"])
+    files = discover_npz(NPZ, names=["default_pose_150frames", "dance1_subject3_last"])
     args = SuperMimicEnvCfgArgs(npz_files=[str(f) for f in files], num_envs=16, replay_capacity=64, obs_noise=False, seed=3)
     env = make_env(args, device="cuda:0")
     torch.backends.cuda.matmul.allow_tf32 = False  # make_env turns TF32 on; keep the comparison exact
     robot = env.scene["robot"]
-    fk = G1Kinematics(load_g1_model(), device=env.device, dtype=torch.float32)
+    fk = G1Kinematics(load_h1_model(), device=env.device, dtype=torch.float32)
     heads = AnalyticHeads(
         fk,
         TRACKED_BODIES,
@@ -65,7 +66,7 @@ def test_reward_terms_match_mjlab(setup):
     cmd = env.command_manager.get_term("motion")
     worst = {}
     for step in range(25):
-        act = 0.5 * torch.randn(env.num_envs, 29, device=env.device)
+        act = 0.5 * torch.randn(env.num_envs, NJ, device=env.device)
         env.step(act)
         # Post-step: sim.forward() has run and the command advanced; evaluate both on this instant.
         s = io.read()
@@ -98,7 +99,7 @@ def test_observation_head_matches_env(setup):
     q0 = robot.data.default_joint_pos[0]
     hist = []
     for step in range(14):
-        act = 0.5 * torch.randn(env.num_envs, 29, device=env.device)
+        act = 0.5 * torch.randn(env.num_envs, NJ, device=env.device)
         obs, *_ = env.step(act)
         if env.reset_buf.any():
             pytest.skip("an env reset during the short rollout; rerun")  # keeps the test simple and exact
@@ -108,7 +109,7 @@ def test_observation_head_matches_env(setup):
         newest = obs["policy"].view(env.num_envs, -1)
         # Newest frame of each term in the term-major layout.
         start = 0
-        for name, d in (("joint_pos", 29), ("joint_vel", 29), ("base_ang_vel", 3), ("projected_gravity", 3), ("actions", 29)):
+        for name, d in (("joint_pos", NJ), ("joint_vel", NJ), ("base_ang_vel", 3), ("projected_gravity", 3), ("actions", NJ)):
             block = newest[:, start * 10 : (start + d) * 10].reshape(env.num_envs, 10, d)  # time-major inside a term
             env_newest = block[:, -1, :]
             our = o[:, start : start + d]
@@ -125,7 +126,7 @@ def test_termination_matches_env(setup):
     env.reset()
     cmd = env.command_manager.get_term("motion")
     for _ in range(10):
-        env.step(1.0 * torch.randn(env.num_envs, 29, device=env.device))
+        env.step(1.0 * torch.randn(env.num_envs, NJ, device=env.device))
         s = io.read()
         ref = _ref_from_command(cmd)
         b = heads.robot_bodies(s)
@@ -141,7 +142,7 @@ def test_termination_matches_env(setup):
 
 def test_anchor_relative_obs_matches_env():
     """The analytic anchor-relative term (from state via FK) equals mjlab's observation terms."""
-    from supermimic.data.motion_convert import load_g1_model
+    from supermimic.robots.h1 import load_h1_model
     from supermimic.envs import SuperMimicEnvCfgArgs, make_env
     from supermimic.envs.mdp.motion_library import discover_npz
     from supermimic.envs.state_io import StateIO
@@ -149,23 +150,23 @@ def test_anchor_relative_obs_matches_env():
     from supermimic.kinematics.g1_fk import G1Kinematics
     from supermimic.world_model.heads import AnalyticHeads, anchor_relative_obs
 
-    files = discover_npz(NPZ, names=["walk1_subject1"])
+    files = discover_npz(NPZ, names=["default_pose_150frames"])
     env = make_env(SuperMimicEnvCfgArgs(npz_files=[str(f) for f in files], num_envs=8, obs_noise=False, anchor_obs=True, record_transitions=False, seed=4), "cuda:0")
     torch.backends.cuda.matmul.allow_tf32 = False
     try:
         robot = env.scene["robot"]
-        heads = AnalyticHeads(G1Kinematics(load_g1_model(), device=env.device), TRACKED_BODIES, ANCHOR_BODY, ROOT_BODY, robot.data.soft_joint_pos_limits[0].clone(), robot.data.default_joint_pos[0].clone())
+        heads = AnalyticHeads(G1Kinematics(load_h1_model(), device=env.device), TRACKED_BODIES, ANCHOR_BODY, ROOT_BODY, robot.data.soft_joint_pos_limits[0].clone(), robot.data.default_joint_pos[0].clone())
         io = StateIO(env)
         obs, _ = env.reset()
-        assert obs["goal"].shape == (8, 689)
+        assert obs["goal"].shape == (8, 10 * GOAL_FEAT_DIM + 9)
         cmd = env.command_manager.get_term("motion")
         for _ in range(5):
-            obs, *_ = env.step(0.3 * torch.randn(8, 29, device=env.device))
+            obs, *_ = env.step(0.3 * torch.randn(8, NJ, device=env.device))
             s = io.read()
             b = heads.robot_bodies(s)
             ai = heads.anchor_index
             ref = _ref_from_command(cmd)
             ours = anchor_relative_obs(b["pos"][:, ai], b["quat"][:, ai], ref.body_pos_w[:, ai], ref.body_quat_w[:, ai])
-            np.testing.assert_allclose(ours.cpu().numpy(), obs["goal"][:, 680:].cpu().numpy(), atol=3e-5)
+            np.testing.assert_allclose(ours.cpu().numpy(), obs["goal"][:, 10 * GOAL_FEAT_DIM:].cpu().numpy(), atol=3e-5)
     finally:
         env.close()

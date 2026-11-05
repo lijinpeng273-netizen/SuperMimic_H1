@@ -11,7 +11,10 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from supermimic.config import TrainConfig
-from supermimic.data.motion_convert import load_g1_model
+# from supermimic.data.motion_convert import load_g1_model
+from supermimic.robots.h1 import load_h1_model
+from supermimic.data.motion_format import checkpoint_identity, validate_checkpoint
+from supermimic.robot_dimensions import FEAT_DIM, XI_DIM, GOAL_FEAT_DIM
 from supermimic.envs import SuperMimicEnvCfgArgs, make_env
 from supermimic.envs.mdp.motion_library import discover_npz
 from supermimic.envs.tracking_env_cfg import ANCHOR_BODY, ROOT_BODY, TRACKED_BODIES
@@ -28,8 +31,11 @@ from supermimic.world_model.world_model import WorldModel
 class Trainer:
     def __init__(self, cfg: TrainConfig):
         self.cfg = cfg
-        cfg.policy.goal_dim = cfg.env.future_frames * 68 + (9 if cfg.env.anchor_obs else 0)
+        # cfg.policy.goal_dim = cfg.env.future_frames * 68 + (9 if cfg.env.anchor_obs else 0)
+        cfg.policy.goal_dim = cfg.env.future_frames * GOAL_FEAT_DIM + (9 if cfg.env.anchor_obs else 0)
         cfg.policy_trainer.anchor_obs = cfg.env.anchor_obs
+        cfg.policy_trainer.future_frames = cfg.env.future_frames
+        cfg.policy_trainer.history = cfg.policy.history
         self.rank, local_rank, self.world = init_distributed()
         self.is_main = self.rank == 0
         if self.world > 1:
@@ -54,11 +60,12 @@ class Trainer:
         if not files:
             raise FileNotFoundError(f"no clips under {cfg.data.npz_dir}")
         # 创建训练器环境
-        self.env = make_env(    
+        self.env = make_env(
             SuperMimicEnvCfgArgs(
                 npz_files=[str(f) for f in files],
                 num_envs=cfg.env.num_envs,  # paper: 4096
                 future_frames=cfg.env.future_frames,
+                history_length=cfg.policy.history,
                 episode_length_s=cfg.env.episode_length_s,
                 action_noise_std=cfg.env.action_noise_std,
                 obs_noise=cfg.env.obs_noise,
@@ -79,11 +86,13 @@ class Trainer:
         self.buffer = self.recorder.buffer
         robot = env.scene["robot"]
 
-        fk = G1Kinematics(load_g1_model(), device=self.device)
+        # fk = G1Kinematics(load_g1_model(), device=self.device)
+        fk = G1Kinematics(load_h1_model(), device=self.device)
         heads = AnalyticHeads(fk, TRACKED_BODIES, ANCHOR_BODY, ROOT_BODY, robot.data.soft_joint_pos_limits[0].clone(), robot.data.default_joint_pos[0].clone())
         self.wm = WorldModel(cfg.world_model, heads, self.device)
         self.policy = Policy(cfg.policy).to(self.device)
-        self.critic = Critic(cfg.critic, pcfg=cfg.policy).to(self.device)
+        # self.critic = Critic(cfg.critic, pcfg=cfg.policy).to(self.device)
+        self.critic = Critic(cfg.critic, feat_dim=FEAT_DIM, xi_dim=XI_DIM, pcfg=cfg.policy).to(self.device)
         for m in (self.wm, self.policy, self.critic):
             broadcast_params(m)
         self.wm_trainer = WorldModelTrainer(self.wm, self.lib, cfg.wm_trainer)
@@ -110,6 +119,8 @@ class Trainer:
             return
         torch.save(
             {
+                "robot_identity": checkpoint_identity(),
+                "motion_clips": [(c.name, c.length) for c in self.lib.clips],
                 "iteration": self.iteration,
                 "num_updates": self.num_updates,
                 "wm": self.wm.state_dict(),
@@ -127,6 +138,9 @@ class Trainer:
 
     def load(self, path: Path) -> None:
         ck = torch.load(path, map_location=self.device, weights_only=False)
+        validate_checkpoint(ck)
+        if ck.get("motion_clips") != [(c.name, c.length) for c in self.lib.clips]:
+            raise ValueError("Resume requires the same H1 motion library and clip ordering")
         self.wm.load_state_dict(ck["wm"])
         self.policy.load_state_dict(ck["policy"])
         self.critic.load_state_dict(ck["critic"])

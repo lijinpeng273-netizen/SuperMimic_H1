@@ -17,6 +17,7 @@ import torch
 
 from supermimic.envs import SuperMimicEnvCfgArgs, make_env
 from supermimic.policy.nets import Policy, PolicyCfg
+from supermimic.data.motion_format import validate_checkpoint
 
 
 @dataclass
@@ -32,6 +33,7 @@ class ClipResult:
 
 def load_policy_from_checkpoint(path: str | Path, device: str) -> tuple[Policy, dict]:
     ck = torch.load(path, map_location=device, weights_only=False)
+    validate_checkpoint(ck)
     pc = ck["config"]["policy"]
     pcfg = PolicyCfg(**{k: (tuple(v) if isinstance(v, list) else v) for k, v in pc.items()})
     policy = Policy(pcfg).to(device)
@@ -42,11 +44,14 @@ def load_policy_from_checkpoint(path: str | Path, device: str) -> tuple[Policy, 
 
 @torch.no_grad()
 def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, verbose: bool = True, anchor_obs: bool = False) -> list[ClipResult]:
+    if not npz_files:
+        raise ValueError("Benchmark needs at least one H1 clip")
     num_envs = min(num_envs or 1024, len(npz_files))
     args = SuperMimicEnvCfgArgs(
         npz_files=npz_files,
         num_envs=num_envs,
         future_frames=future_frames,
+        history_length=policy.cfg.history,
         episode_length_s=1.0e5,  # clip end decides
         action_noise_std=0.0,
         obs_noise=False,

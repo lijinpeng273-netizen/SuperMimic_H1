@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from mjlab.asset_zoo.robots import G1_ACTION_SCALE, get_g1_robot_cfg
+# from mjlab.asset_zoo.robots import H1_ACTION_SCALE, get_h1_robot_cfg
+from supermimic.robots.h1 import H1_ACTION_SCALE, get_h1_robot_cfg
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as base_mdp
 from mjlab.envs.mdp import dr
@@ -38,33 +39,31 @@ from supermimic.envs.mdp import terminations as sm_term
 from supermimic.envs.mdp.commands import MultiClipMotionCommandCfg
 
 class QuietSimulationCfg(SimulationCfg):
-    """SimulationCfg that disables MuJoCo Warp's per-step overflow printf (a kernel build-time constant,
-    so it must be set before the CUDA graphs are captured)."""
+    """Legacy wrapper; keep overflow warnings enabled for H1 contact validation."""
 
     def apply_wp_opt(self, wp_opt) -> None:
         super().apply_wp_opt(wp_opt)
-        wp_opt.warn_overflow = 0
+        # wp_opt.warn_overflow = 0
+        wp_opt.warn_overflow = True  # 显示所有接触/约束容量溢出，避免隐藏 H1 配置问题。
 
-
+# 修改成 H1 机器人的配置
 TRACKED_BODIES = (
     "pelvis",
     "left_hip_roll_link",
     "left_knee_link",
-    "left_ankle_roll_link",
+    "left_ankle_link",
     "right_hip_roll_link",
     "right_knee_link",
-    "right_ankle_roll_link",
+    "right_ankle_link",
     "torso_link",
     "left_shoulder_roll_link",
-    "left_elbow_link",
-    "left_wrist_yaw_link",
+    "left_elbow_link_ball_hand",
     "right_shoulder_roll_link",
-    "right_elbow_link",
-    "right_wrist_yaw_link",
+    "right_elbow_link_ball_hand",
 )
 ANCHOR_BODY = "torso_link"
 ROOT_BODY = "pelvis"
-FOOT_GEOM_REGEX = r"^(left|right)_foot[1-7]_collision$"
+FOOT_GEOM_REGEX = r"^(left|right)_ankle_link_collision$"
 
 
 @dataclass
@@ -74,18 +73,18 @@ class SuperMimicEnvCfgArgs:
     future_frames: int = 10
     history_length: int = 10
     episode_length_s: float = 10.0
-    action_noise_std: float = 0.1
+    action_noise_std: float = 0.1   # 噪声标准差
     obs_noise: bool = True
     reset_noise: bool = True
     domain_randomization: bool = True
-    sampling_mode: str = "return"  # return | uniform | start
+    sampling_mode: str = "return"  # return | uniform | start 三种采样方式
     replay_capacity: int = 1000
     record_transitions: bool = True
     seed: int | None = 0
-    root_height_threshold: float = 0.25
-    root_tilt_threshold: float = 0.8
-    joint_limit_weight: float = -2.0
-    bin_frames: int = 50
+    root_height_threshold: float = 0.25 # 根部高度相对参考值允许的最大误差
+    root_tilt_threshold: float = 0.8    # 根部倾斜判据的阈值
+    joint_limit_weight: float = -2.0    # 超出软关节限位的惩罚权重
+    bin_frames: int = 50    # 帧率
     compact_library: bool = False
     anchor_obs: bool = False  # add BeyondMimic anchor-relative pose (9) to the goal group (plan D5 alt.)
     debug_vis: bool = False  # draw the reference ghost in the viewer (scripts/play.py)
@@ -94,8 +93,8 @@ class SuperMimicEnvCfgArgs:
 
 def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
     # ---------------------------------------------------------------- observations
-    noise = (lambda lo, hi: Unoise(n_min=lo, n_max=hi)) if a.obs_noise else (lambda lo, hi: None)
-    policy_terms = {
+    noise = (lambda lo, hi: Unoise(n_min=lo, n_max=hi)) if a.obs_noise else (lambda lo, hi: None)   # 定义噪声函数
+    policy_terms = {    # 在观测中加上范围噪声
         "joint_pos": ObservationTermCfg(func=base_mdp.joint_pos_rel, params={"biased": True}, noise=noise(-0.01, 0.01)),
         "joint_vel": ObservationTermCfg(func=base_mdp.joint_vel_rel, noise=noise(-0.5, 0.5)),
         "base_ang_vel": ObservationTermCfg(func=base_mdp.base_ang_vel, noise=noise(-0.2, 0.2)),
@@ -103,14 +102,14 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
         "actions": ObservationTermCfg(func=base_mdp.last_action),
     }
     observations = {
-        "policy": ObservationGroupCfg(
+        "policy": ObservationGroupCfg(  # 本体观测 10 * 63
             terms=policy_terms,
             concatenate_terms=True,
             enable_corruption=a.obs_noise,
             history_length=a.history_length,
             flatten_history_dim=True,
         ),
-        "goal": ObservationGroupCfg(
+        "goal": ObservationGroupCfg(    # 目标参考观测
             terms={
                 "future_frames": ObservationTermCfg(func=sm_obs.goal_future_frames, params={"command_name": "motion"}),
                 **(
@@ -128,21 +127,22 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
     }
 
     # ---------------------------------------------------------------- actions
-    actions = {
+    actions = { # 策略动作转换为关节目标
         "joint_pos": NoisyJointPositionActionCfg(
             entity_name="robot",
             actuator_names=(".*",),
-            scale=G1_ACTION_SCALE,
+            scale=H1_ACTION_SCALE,
             use_default_offset=True,
             noise_std=a.action_noise_std,
         )
     }
 
     # ---------------------------------------------------------------- commands
+    # 设置重置时候的扰动值
     pose_range = {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.01, 0.01), "roll": (-0.1, 0.1), "pitch": (-0.1, 0.1), "yaw": (-0.2, 0.2)}
     vel_range = {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "z": (-0.2, 0.2), "roll": (-0.52, 0.52), "pitch": (-0.52, 0.52), "yaw": (-0.78, 0.78)}
     commands = {
-        "motion": MultiClipMotionCommandCfg(
+        "motion": MultiClipMotionCommandCfg(    # 参考动作命令
             npz_files=[str(f) for f in a.npz_files],
             anchor_body_name=ANCHOR_BODY,
             root_body_name=ROOT_BODY,
@@ -153,7 +153,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
             pose_range=pose_range if a.reset_noise else {},
             velocity_range=vel_range if a.reset_noise else {},
             joint_position_range=(-0.1, 0.1) if a.reset_noise else (0.0, 0.0),
-            sampling_mode=a.sampling_mode,  # type: ignore[arg-type]
+            sampling_mode=a.sampling_mode,  # type: ignore[arg-type] 采样方式
             compact_library=a.compact_library,
             debug_vis=a.debug_vis,
             **a.extra_command_kwargs,
@@ -161,23 +161,23 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
     }
 
     # ---------------------------------------------------------------- events (plan D8)
-    events: dict[str, EventTermCfg] = {}
+    events: dict[str, EventTermCfg] = {}    # 物理参数和传感器参数的随机化
     if a.domain_randomization:
         events["base_com"] = EventTermCfg(
-            mode="startup",
+            mode="startup", # 什么时候触发事件，startup表示在环境启动时触发
             func=dr.body_com_offset,
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=("torso_link",)),
-                "operation": "add",
+                "operation": "add", # 表示在质心部分加上坐标偏移
                 "ranges": {0: (-0.025, 0.025), 1: (-0.05, 0.05), 2: (-0.05, 0.05)},
             },
         )
-        events["encoder_bias"] = EventTermCfg(
+        events["encoder_bias"] = EventTermCfg(  # 编码器偏置，随机化传感器的读数
             mode="reset",
             func=dr.encoder_bias,
             params={"asset_cfg": SceneEntityCfg("robot"), "bias_range": (-0.01, 0.01)},
         )
-        events["foot_friction"] = EventTermCfg(
+        events["foot_friction"] = EventTermCfg( # 摩擦系数随机化
             mode="reset",
             func=dr.geom_friction,
             params={
@@ -201,7 +201,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
         )
 
     # ---------------------------------------------------------------- rewards (Table A.2)
-    rewards = {
+    rewards = { # 运动跟踪奖励函数 计算函数，权重，计算参数
         "motion_global_root_pos": RewardTermCfg(func=track_mdp.motion_global_anchor_position_error_exp, weight=0.5, params={"command_name": "motion", "std": 0.3}),
         "motion_global_root_ori": RewardTermCfg(func=track_mdp.motion_global_anchor_orientation_error_exp, weight=0.5, params={"command_name": "motion", "std": 0.4}),
         "motion_body_pos": RewardTermCfg(func=track_mdp.motion_relative_body_position_error_exp, weight=1.0, params={"command_name": "motion", "std": 0.3}),
@@ -213,19 +213,19 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
     }
 
     # ---------------------------------------------------------------- terminations
-    terminations = {
+    terminations = {    # 终止条件判断
         "time_out": TerminationTermCfg(func=base_mdp.time_out, time_out=True),
         "clip_end": TerminationTermCfg(func=sm_term.clip_end, params={"command_name": "motion"}, time_out=True),
         "root_height": TerminationTermCfg(func=sm_term.bad_root_height, params={"command_name": "motion", "threshold": a.root_height_threshold}),
         "root_tilt": TerminationTermCfg(func=sm_term.bad_root_tilt, params={"command_name": "motion", "threshold": a.root_tilt_threshold}),
     }
 
-    recorders = {}
+    recorders = {}  # 配置交互数据记录器
     if a.record_transitions:
         recorders["replay"] = ReplayRecorderCfg(params={"capacity": a.replay_capacity, "foot_geom_regex": FOOT_GEOM_REGEX, "com_body_name": "torso_link"})
 
-    cfg = ManagerBasedRlEnvCfg( # 指定使用G1机器人模型，设置环境参数，包括场景、观察、动作、命令、事件、奖励、终止条件、记录器、查看器和模拟配置
-        scene=SceneCfg(terrain=TerrainEntityCfg(terrain_type="plane"), num_envs=a.num_envs, entities={"robot": get_g1_robot_cfg()}),
+    cfg = ManagerBasedRlEnvCfg( # 指定使用 H1 机器人模型，设置场景、观测、动作和仿真参数。
+        scene=SceneCfg(terrain=TerrainEntityCfg(terrain_type="plane"), num_envs=a.num_envs, entities={"robot": get_h1_robot_cfg()}),
         observations=observations,
         actions=actions,
         commands=commands,
@@ -233,15 +233,18 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
         rewards=rewards,
         terminations=terminations,
         recorders=recorders,
+        # 设置观测视角
         viewer=ViewerConfig(origin_type=ViewerConfig.OriginType.ASSET_BODY, entity_name="robot", body_name="torso_link", distance=2.8, fovy=55.0, elevation=-5.0, azimuth=120.0),
-        sim=QuietSimulationCfg(nconmax=35, njmax=250, mujoco=MujocoCfg(timestep=0.005, iterations=10, ls_iterations=20)),
+        # 设置模拟参数，包括时间步长、迭代次数和最大接触数
+        # Original G1: ls_iterations=20; H1 contact verification reached that limit.
+        sim=QuietSimulationCfg(nconmax=35, njmax=250, mujoco=MujocoCfg(timestep=0.005, iterations=10, ls_iterations=50)),
         decimation=4,
         episode_length_s=a.episode_length_s,
         seed=a.seed,
     )
     return cfg
 
-
+# 创建环境实例
 def make_env(a: SuperMimicEnvCfgArgs, device: str = "cuda:0") -> ManagerBasedRlEnv:
     from mjlab.utils.torch import configure_torch_backends
 

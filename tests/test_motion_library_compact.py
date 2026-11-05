@@ -5,10 +5,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from supermimic.robot_dimensions import NJ, NQ, STATE_DIM, DELTA_DIM, XI_DIM, OBS_DIM, GOAL_FEAT_DIM
 
 ROOT = Path(__file__).resolve().parents[1]
-NPZ = ROOT / "data/npz/lafan1"
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or not NPZ.exists(), reason="needs CUDA + LAFAN1 npz")
+NPZ = ROOT / "data/npz/h1"
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or not NPZ.exists(), reason="needs CUDA + H1 npz")
 
 
 def test_compact_matches_full():
@@ -16,8 +17,8 @@ def test_compact_matches_full():
     from supermimic.envs.mdp.motion_library import MotionLibrary, discover_npz
     from supermimic.envs.tracking_env_cfg import TRACKED_BODIES
 
-    files = discover_npz(NPZ, names=["walk1_subject1", "jumps1_subject1"])
-    q0 = torch.zeros(29)
+    files = discover_npz(NPZ, names=["default_pose_150frames", "dance1_subject3_last"])
+    q0 = torch.zeros(NJ)
     full = MotionLibrary(files, TRACKED_BODIES, q0, device="cuda", compact=False)
     comp32 = MotionLibrary(files, TRACKED_BODIES, q0, device="cuda", compact=True, store_dtype=torch.float32)
     comp16 = MotionLibrary(files, TRACKED_BODIES, q0, device="cuda", compact=True, store_dtype=torch.float16)

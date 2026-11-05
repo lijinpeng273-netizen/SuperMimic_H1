@@ -1,8 +1,8 @@
-"""Batch-convert G1 retarget CSVs to mjlab-compatible 50 Hz motion npz files.
+"""Batch-convert H1 retarget CSVs to mjlab-compatible 50 Hz motion npz files.
 
 Example:
-  uv run python scripts/data/csv_to_npz_batch.py --input-dir data/raw/lafan1/g1 \
-      --output-dir data/npz/lafan1 --input-fps 30 --workers 16
+  uv run python scripts/data/csv_to_npz_batch.py --input-dir data/raw/h1 \
+      --output-dir data/npz/h1 --input-fps 30 --workers 16
 
 Writes <output_dir>/<clip>.npz for every CSV and <output_dir>/manifest.csv.
 A per-clip fps override can be given with --fps-map (CSV with columns `name,fps`).
@@ -26,9 +26,9 @@ def _init_worker() -> None:
     global _MODEL
     # Keep BLAS single-threaded inside workers.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
-    from supermimic.data.motion_convert import load_g1_model
+    from supermimic.robots.h1 import load_h1_model
 
-    _MODEL = load_g1_model()
+    _MODEL = load_h1_model()
 
 
 def _convert_one(args: tuple[str, str, float, float]) -> dict:
@@ -106,6 +106,9 @@ def main(
         w.writerows(rows)
     total_h = sum(r["duration_s"] for r in rows) / 3600.0
     print(f"manifest: {len(rows)} clips, {total_h:.3f} h total, {len(failures)} failures, {time.time() - t0:.0f}s")
+
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

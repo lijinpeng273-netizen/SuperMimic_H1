@@ -1,7 +1,7 @@
 """Watch a trained tracking policy replay reference clips in an interactive viewer.
 
   uv run python scripts/play.py --ckpt logs/e5_bones_seed/ckpt_latest.pt --clips dance1_subject1
-  uv run python scripts/play.py --ckpt logs/e3_lafan1_40_anchor/ckpt_latest.pt --npz-dir data/npz/lafan1 --num-envs 4
+  uv run python scripts/play.py --ckpt logs/e3_lafan1_40_anchor/ckpt_latest.pt --npz-dir data/npz/h1 --num-envs 4
 
 The grey/blue translucent robot is the reference pose; the solid robot is the policy.
 Deterministic evaluation settings (no noise, no DR); every reset starts the clip from its first frame.
@@ -38,7 +38,7 @@ class _DictPolicy:
 
 def main(
     ckpt: Path,
-    npz_dir: Path = Path("data/npz/lafan1"),
+    npz_dir: Path = Path("data/npz/h1"),
     clips: list[str] | None = None,
     num_envs: int = 1,
     device: str = "cuda:0",
@@ -51,7 +51,7 @@ def main(
     args = SuperMimicEnvCfgArgs(
         npz_files=files,
         num_envs=num_envs,
-        future_frames=cfg["env"]["future_frames"],
+        future_frames=cfg["env"]["future_frames"], history_length=policy.cfg.history,
         episode_length_s=1.0e5,
         action_noise_std=0.0,
         obs_noise=False,

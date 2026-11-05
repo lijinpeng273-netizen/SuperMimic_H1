@@ -1,7 +1,7 @@
 """Dynamics MLP f_omega (paper Table A.4: MLP (2048, 2048, 2048))."""
 
 from __future__ import annotations
-
+from supermimic.robot_dimensions import FEAT_DIM, ACT_DIM, XI_DIM, DELTA_DIM
 import torch
 import torch.nn as nn
 
@@ -29,11 +29,15 @@ class MLP(nn.Module):
 
 
 class DynamicsMLP(nn.Module):
-    """delta = f(canonical(s), a, xi_norm) -> (…, 70). Zero-initialised last layer (identity dynamics at init)."""
+    """delta = f(canonical(s), a, xi_norm) -> (…, 50). Zero-initialised last layer (identity dynamics at init)."""
 
-    def __init__(self, feat_dim: int = 71, act_dim: int = 29, xi_dim: int = 33, hidden=(2048, 2048, 2048), out_dim: int = 70):
+    # def __init__(self, feat_dim: int = 71, act_dim: int = 29, xi_dim: int = 33, hidden=(2048, 2048, 2048), out_dim: int = 70):
+    #     super().__init__()
+    #     self.mlp = MLP(feat_dim + act_dim + xi_dim, tuple(hidden), out_dim, zero_last=True)
+
+    def __init__(self, feat_dim: int = FEAT_DIM, act_dim: int = ACT_DIM,xi_dim: int = XI_DIM, hidden=(2048, 2048, 2048),out_dim: int = DELTA_DIM):
         super().__init__()
-        self.mlp = MLP(feat_dim + act_dim + xi_dim, tuple(hidden), out_dim, zero_last=True)
+        self.mlp = MLP(feat_dim + act_dim + xi_dim, tuple(hidden), out_dim,zero_last=True)
 
     def forward(self, feat: torch.Tensor, action: torch.Tensor, xi_norm: torch.Tensor) -> torch.Tensor:
         return self.mlp(torch.cat([feat, action, xi_norm], dim=-1))

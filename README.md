@@ -1,4 +1,17 @@
-# SuperMimic-Reproduced
+# SuperMimic-Reproduced — H1 workspace
+
+当前工作区已迁移到 **19 关节 H1**。训练、参考动作、世界模型、Actor/Critic、评测和媒体入口均使用 H1。
+
+```bash
+cd /home/ljp/human_learn/SuperMimic-Reproduced-main
+bash scripts/train_h1.sh --run-name h1_train
+```
+
+本机数据：`data/npz/h1/`；本机 8 GB 显卡的起步配置、数据转换来源和验证记录见 [H1 迁移与训练说明](docs/H1迁移完成与训练说明.md)。旧 G1 checkpoint、动作和 packed library 不兼容当前 H1 实现。
+
+## 原始 G1 复现记录（历史资料）
+
+下方保留原仓库的 G1 实验结果、媒体和命令作为历史资料，不代表当前 H1 策略的效果；当前使用方法以上方 H1 文档为准。
 
 An independent, from-scratch reproduction of **SuperMimic: Scaling Humanoid Whole-Body Control with One Differentiable World Model** ([arXiv:2610.28480](https://arxiv.org/abs/2610.28480), CoRL 2026) for the Unitree G1, built on [mjlab](https://github.com/mujocolab/mjlab) / MuJoCo Warp. No official code is released; everything here (motion library, differentiable FK, world model, BPTT trainer, return-based reset sampling, data-parallel training, Appendix-F benchmark) is implemented from the paper.
 
@@ -25,7 +38,7 @@ Three findings that the numbers above depend on:
 - **The paper's name filter includes acrobatics.** Our first filter kept SONIC's acrobatics keywords (cartwheel, handstand, safety roll, …), giving 129,943 clips vs the paper's 129,514. Those 452 clips account for 350 of our 495 failures (handstand 134/134, cartwheel 108/120). With the keywords restored the count is 129,491 (23 off the paper) and the failure rate 0.11 %; the filter script now matches.
 - **The remaining gap is concentrated in flips.** Of the 145 failures, all 54 flip clips fail (the paper reports 1 failure on 44 flips after 3 h). Training return had plateaued at 0.81 with the learning rate not yet decayed (stopped at 100k of 320k scheduled iterations); longer training with the cosine decay is the obvious next step.
 
-The headline checkpoint (100k iterations, 223 MB) is attached to the [GitHub release `e8-boneseed-100k`](https://github.com/CuboiLeo/SuperMimic-Reproduced/releases/tag/e8-boneseed-100k); it loads directly into `scripts/eval_benchmark.py`, `scripts/play.py` and the media scripts below.
+The headline checkpoint (100k iterations, 223 MB) is attached to the [GitHub release `e8-boneseed-100k`](https://github.com/CuboiLeo/SuperMimic-Reproduced/releases/tag/e8-boneseed-100k); it was used with the original G1 version of the evaluation/play/media scripts; it cannot load into the current H1 workspace.
 
 Full per-experiment logs (configs, curves, checkpoints, failure breakdowns, dead ends) are in [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) (Chinese).
 

@@ -13,7 +13,9 @@ from supermimic.world_model.world_model import WorldModelCfg
 
 @dataclass
 class DataCfg:
-    npz_dir: Path = Path("data/npz/lafan1")
+    # npz_dir: Path = Path("data/npz/lafan1")
+    # H1 reference motions, validated for this robot and 50 Hz control.
+    npz_dir: Path = Path("data/npz/h1")
     clips: list[str] | None = None  # None = all npz in npz_dir
     limit: int | None = None
     manifest: Path | None = None  # csv with name,keep (filter_bones_seed.py output)

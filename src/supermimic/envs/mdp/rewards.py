@@ -86,7 +86,7 @@ def tracking_reward_terms(
     action: torch.Tensor,
     prev_action: torch.Tensor,
     joint_pos: torch.Tensor,
-    soft_limits: torch.Tensor,  # (29, 2) or (N, 29, 2)
+    soft_limits: torch.Tensor,  # (19, 2) or (N, 19, 2)
     cfg: TrackingRewardCfg,
 ) -> dict[str, torch.Tensor]:
     """Per-term weighted, dt-scaled rewards (N,) plus 'total'."""

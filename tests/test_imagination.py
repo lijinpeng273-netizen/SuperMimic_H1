@@ -5,9 +5,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from supermimic.robot_dimensions import NJ, NQ, STATE_DIM, DELTA_DIM, XI_DIM, OBS_DIM, GOAL_FEAT_DIM
 
 ROOT = Path(__file__).resolve().parents[1]
-NPZ = ROOT / "data/npz/lafan1"
+NPZ = ROOT / "data/npz/h1"
 
 
 def test_gae_targets_match_hand_computation():
@@ -30,22 +31,24 @@ def test_gae_targets_match_hand_computation():
     np.testing.assert_allclose(out1[0].numpy(), mc.numpy(), atol=1e-6)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available() or not NPZ.exists(), reason="needs CUDA + LAFAN1 npz")
+@pytest.mark.skipif(not torch.cuda.is_available() or not NPZ.exists(), reason="needs CUDA + H1 npz")
 def test_training_smoke(tmp_path):
     from supermimic.config import TrainConfig
     from supermimic.training.loop import Trainer
 
     cfg = TrainConfig(run_name="smoke", log_root=tmp_path, seed=1)
-    cfg.data.clips = ["walk1_subject1"]
-    cfg.env.num_envs = 128
+    cfg.data.clips = ["default_pose_150frames"]
+    cfg.env.num_envs = 16
     cfg.env.replay_capacity = 200
     cfg.world_model.hidden = (256, 256)
     cfg.policy.encoder_hidden = (256, 128)
     cfg.policy.decoder_hidden = (256, 128)
-    cfg.wm_trainer.batch_size = 256
-    cfg.wm_trainer.batches_per_update = 2
-    cfg.policy_trainer.batch_size = 128
-    cfg.policy_trainer.horizon = 8
+    cfg.wm_trainer.batch_size = 32
+    cfg.wm_trainer.batches_per_update = 1
+    cfg.wm_trainer.compile = None
+    cfg.policy_trainer.batch_size = 8
+    cfg.policy_trainer.horizon = 32
+    cfg.policy_trainer.compile = None
     cfg.schedule.total_iterations = 60
     cfg.schedule.warmup_iterations = 20
     cfg.schedule.log_interval = 20

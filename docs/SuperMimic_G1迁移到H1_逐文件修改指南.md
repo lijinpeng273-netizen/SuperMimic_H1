@@ -4,7 +4,7 @@
 
 本文说明如何把当前 G1 训练实现改为使用仓库 `h1_data/` 中的 H1 模型。每一步给出修改位置、修改方法、原因和检查方法。机器人按 **19 个实际关节、位置目标控制、50 Hz 策略频率**处理。
 
-**实施进度：已完成第 2～4 章，第 5 章及后续接入尚未执行。** 已生成 H1 训练 XML、统一维度模块、H1 加载器和执行器配置。按用户要求，停用的 XML 定义全部保留为注释；用户已经修改的 `h1.xml` 仅补齐了占位 body 的注释边界。当前训练入口仍使用 G1，尚未切换为 H1。默认 Python 为 3.13，缺少 mjlab，而仓库要求 Python 3.12，因此 CPU 资产检查不能替代项目环境下的实体构建和训练测试。
+**实施进度（2026-11-05）：第 2～17 章的 H1 专用实现已接入。** 本机已配置 `.venv`（Python 3.12、mjlab、CUDA）；当前训练、世界模型、Actor/Critic、动作转换、compact 动作库和评测/播放入口均使用 H1。具体改动、真实数据来源、启动命令和实际验证结果见 [H1迁移完成与训练说明](H1迁移完成与训练说明.md)。第 18 章是未来同时支持多机器人的设计建议。下面的“原位置”指迁移前代码，行号随修改变化，应优先按函数名定位。
 
 为了让修改步骤明确，正文采用“在独立分支或副本上形成 H1 专用版本”的方法：全仓库使用一个统一的 H1 维度定义。它不提供同一进程中 G1/H1 的动态切换。若要长期同时维护两种机器人，见第 18 节的配置化方案。
 
@@ -57,7 +57,7 @@ flowchart TD
 
 原始入口位置：
 
-| 路径 | 当前源码位置 | 当前行为 |
+| 路径 | 迁移前源码位置 | 迁移前行为 |
 |---|---|---|
 | 仿真机器人 | [tracking_env_cfg.py 第 228 行](../src/supermimic/envs/tracking_env_cfg.py#L228) | 调用 `get_g1_robot_cfg()` |
 | 世界模型的 FK | [training/loop.py 第 82 行](../src/supermimic/training/loop.py#L82) | `G1Kinematics(load_g1_model())` |
@@ -120,7 +120,7 @@ env -u PYTHONPATH uv run python scripts/data/prepare_h1_asset.py
 <a id="step-3"></a>
 ## 3. 建立统一维度定义
 
-已新增 [src/supermimic/robot_dimensions.py](../src/supermimic/robot_dimensions.py)，避免多处手动填写 19、51、63 等数字。当前只建立定义，尚未修改原训练模块的导入。
+已新增 [src/supermimic/robot_dimensions.py](../src/supermimic/robot_dimensions.py)，避免多处手动填写 19、51、63 等数字。训练、数据和网络模块现在已统一导入这些定义。
 
 ```python
 """H1 专用训练版本的数据维度。"""
@@ -224,11 +224,14 @@ def get_h1_spec():
 继续在 `h1.py` 中增加：
 
 ```python
-H1_DEFAULT_JOINT_POS = {name: 0.0 for name in H1_JOINT_NAMES}
-for side in ("left", "right"):
-    H1_DEFAULT_JOINT_POS[f"{side}_hip_pitch_joint"] = -0.4
-    H1_DEFAULT_JOINT_POS[f"{side}_knee_joint"] = 0.8
-    H1_DEFAULT_JOINT_POS[f"{side}_ankle_joint"] = -0.4
+# 按 H1_JOINT_NAMES 顺序；当前源码使用用户设置的列表。
+default_pos = [
+    0.0, 0.0, -0.4, 0.8, -0.4,
+    0.0, 0.0, -0.4, 0.8, -0.4,
+    0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+]
 
 # 初次联调采用统一缩放；后续可以按关节调整。
 H1_ACTION_SCALE = {name: 0.25 for name in H1_JOINT_NAMES}
@@ -246,34 +249,23 @@ q_target = q_default + action_scale × action
 
 ### 4.3 创建位置执行器
 
-下面是一份接口示例，继续写入 `h1.py`。Kp 使用本机既有 H1 仿真配置中的后备值，Kd 按该配置中的 `0.05×Kp` 取值；力矩上限取当前 `h1.xml` 的 motor 控制范围。**这组组合用于启动仿真联调，尚未在 SuperMimic 中验证稳定性。**
-
-本地参考：[H1 仿真增益配置，第 73 行](/home/ljp/human_learn/whole_body/Beyondmimic_Deploy_H1_last/h1sim2sim_v2_config.py:73)。
+当前保留用户已设定的 PD 列表，按 `H1_JOINT_NAMES` 顺序排列。以下与 [robots/h1.py](../src/supermimic/robots/h1.py) 一致；短训练通过不代表控制参数已经达到最优跟踪效果。
 
 ```python
-# 后缀: (Kp, Kd, 当前模型中的力矩上限)
-H1_PD = {
-    "hip_yaw_joint": (80.0, 4.0, 200.0),
-    "hip_roll_joint": (150.0, 7.5, 200.0),
-    "hip_pitch_joint": (150.0, 7.5, 200.0),
-    "knee_joint": (200.0, 10.0, 300.0),
-    "ankle_joint": (80.0, 4.0, 40.0),
-    "torso_joint": (150.0, 7.5, 200.0),
-    "shoulder_pitch_joint": (40.0, 2.0, 40.0),
-    "shoulder_roll_joint": (40.0, 2.0, 40.0),
-    "shoulder_yaw_joint": (20.0, 1.0, 18.0),
-    "elbow_joint": (20.0, 1.0, 18.0),
-}
+stiffness = [150, 150, 150, 200, 40, 150, 150, 150, 200, 40,
+             300, 100, 100, 100, 50, 100, 100, 100, 50]
+damping = [2, 2, 2, 4, 2, 2, 2, 2, 4, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2]
+effort_limit = [200, 200, 200, 300, 40, 200, 200, 200, 300, 40,
+                200, 40, 40, 18, 18, 40, 40, 18, 18]
 
 def get_h1_robot_cfg():
     from mjlab.actuator import BuiltinPositionActuatorCfg
     from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
     actuators = []
-    for name in H1_JOINT_NAMES:
-        matches = [v for suffix, v in H1_PD.items() if name.endswith(suffix)]
-        assert len(matches) == 1, name
-        kp, kd, effort = matches[0]
+    for name, kp, kd, effort in zip(
+        H1_JOINT_NAMES, stiffness, damping, effort_limit, strict=True
+    ):
         actuators.append(BuiltinPositionActuatorCfg(
             target_names_expr=(name,),
             stiffness=kp,
@@ -287,7 +279,7 @@ def get_h1_robot_cfg():
         spec_fn=get_h1_spec,
         init_state=EntityCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.98),
-            joint_pos=dict(H1_DEFAULT_JOINT_POS),
+            joint_pos=dict(zip(H1_JOINT_NAMES, default_pos, strict=True)),
             joint_vel={".*": 0.0},
         ),
         articulation=EntityArticulationInfoCfg(
@@ -364,7 +356,7 @@ FOOT_GEOM_REGEX = r"^(left|right)_ankle_link_collision$"
 | Viewer 的 body | `torso_link` 可保留 |
 | timestep、decimation | 先保留 0.005 秒、4，策略周期仍为 0.02 秒 |
 
-原 `QuietSimulationCfg` 会关闭接触溢出提示。迁移调试时应检查 `nconmax=35`、`njmax=250` 是否足够；必要时恢复提示、观察接触使用量后调整。关节数少不代表 mesh 接触需求一定更少。
+当前 `QuietSimulationCfg` 已恢复全部溢出提示。H1 联调触发了原 `ls_iterations=20` 的线搜索上限，因此提高到 50；`nconmax=35`、`njmax=250` 仍需在更大规模训练中持续观察。关节数少不代表 mesh 接触需求一定更少。
 
 默认姿态由 EntityCfg 提供，但训练回合仍会由 `MultiClipMotionCommand` 从 H1 参考动作中采样起点。更换机器人不需要改变之前讨论的多环境起点采样原理。
 
@@ -756,11 +748,11 @@ G1 的 29 维动作删去 10 维，不会自然成为 H1 的动作。两者关�
 H1 专用版本可以这样处理：
 
 1. 导入 `H1_JOINT_NAMES` 和 `load_h1_model`。
-2. 删除原 G1 关节元组，设置 `JOINT_NAMES = H1_JOINT_NAMES`、`NUM_JOINTS = len(JOINT_NAMES)`。
-3. 删除仅用于 G1 的 `g1_xml_path()`、`load_g1_model()`；调用方改为明确导入 H1 loader。
-4. `load_csv()` 中的关节列检查使用 `JOINT_NAMES`。
+2. 将原 G1 关节元组保留为注释，使用 `H1_JOINT_NAMES`、`NUM_JOINTS = len(H1_JOINT_NAMES)`。
+3. 注释仅用于 G1 的 `g1_xml_path()`、`load_g1_model()`；调用方改为明确导入 H1 loader。
+4. `load_csv()` 中的关节列检查使用 `H1_JOINT_NAMES`。
 5. `convert_csv_to_npz()` 的默认模型改成 `load_h1_model()`。
-6. 保存 NPZ 时 `joint_names=np.array(JOINT_NAMES)`。
+6. 保存 NPZ 时 `joint_names=np.array(H1_JOINT_NAMES)`。
 
 关键原位置：
 
@@ -821,7 +813,7 @@ env -u PYTHONPATH uv run python scripts/data/csv_to_npz_batch.py \
 | [default_pose_150frames.npz](/home/ljp/human_learn/whole_body/Beyondmimic_Deploy_H1_last/deploy_real/bydmimic/default_pose_150frames.npz) | 249 | `(249,19)` | `(249,20,3)` | 50 |
 | [dance1_subject3_last.npz](/home/ljp/human_learn/whole_body/Beyondmimic_Deploy_H1_last/deploy_real/bydmimic/dance1_subject3_last.npz) | 1182 | `(1182,19)` | `(1182,20,3)` | 50 |
 
-它们还包含关节速度、body 四元数、body 线速度和角速度，但没有 `joint_names` 和 `body_names`。当前 MotionLibrary 会读取 body_names，因此不能直接作为已适配数据使用。
+来源文件还包含关节速度、body 四元数、body 线速度和角速度，但没有 `joint_names` 和 `body_names`，不能直接输入 MotionLibrary。本次已通过配套 ONNX 元数据恢复关节顺序并重新计算 H1 FK，整理后的独立副本位于 `data/npz/h1/`；站立片段同时校正了固定根高度。转换细节见 [实施说明第 3 节](H1迁移完成与训练说明.md#3-已准备的-h1-动作)。
 
 正确适配顺序：从原导出脚本、训练资产或 checkpoint 元数据恢复关节和 body 顺序；按名称重排 joint_pos/joint_vel；确认 pelvis 索引和四元数约定；核对训练 XML。若骨架版本或 frame 定义不同，应使用确认后的根状态、关节状态和当前 H1 模型重算 body FK。最后保存名称元数据与转换来源。
 
@@ -834,7 +826,7 @@ env -u PYTHONPATH uv run python scripts/data/csv_to_npz_batch.py \
 
 ### 13.1 维度和拆分
 
-删除原 `GOAL_FEAT_DIM=68`、`REF_DIM=71`，导入：
+注释原 `GOAL_FEAT_DIM=68`、`REF_DIM=71`，导入：
 
 ```python
 from supermimic.robot_dimensions import NJ, NQ, GOAL_FEAT_DIM, REF_DIM, STATE_SIZES
@@ -863,7 +855,7 @@ def _split(r: torch.Tensor) -> RefState:
 
 动作库的 51 维 reference 与仿真状态的 51 维布局长度相同，但参考数据的根角速度存为**世界坐标系**。`ref_qpos_qvel()` 通过 `quat_apply_inverse` 把它转成 MuJoCo 根部角速度，必须保留。
 
-不能把 `lib.ref71(...)` 的返回值不经转换直接当成仿真完整状态。函数名 `ref71` 可以暂时保留以减少接口变化，但更新注释为 reference state；后续统一更名时要搜索调用方。
+当前函数已命名为 `lib.ref_state(...)`。其返回值不能不经角速度转换就当作仿真完整状态；仿真初始化应调用 `ref_qpos_qvel()`。
 
 ### 13.3 compact FK 必须换模型
 
@@ -883,7 +875,7 @@ self._tracked_idx = self._fk.body_indices(self.body_names)
 
 在每个 NPZ 加载处检查：关节数为 19、关节名称顺序等于 `H1_JOINT_NAMES`、fps 为 50、必需 body 名称全部存在、各数组帧数一致且数值有限。
 
-当前代码只在首个文件构造 `body_idx/root_idx`。应每个文件根据自己的 `body_names` 重新求索引，或者要求所有文件 body 顺序完全一致并明确断言。不要让后续文件偷偷沿用第一个文件的索引。
+迁移前只在首个文件构造 `body_idx/root_idx`。当前已经在每个文件上根据自己的 `body_names` 重新求索引。不要让后续文件偷偷沿用第一个文件的索引。
 
 如果校验名称不一致，应先离线转换并保存重排后的文件，再训练。这样缓存、评测和训练都读同一套整理后的数据。
 
@@ -927,7 +919,7 @@ self._tracked_idx = self._fk.body_indices(self.body_names)
 | [scripts/diag_drift.py](../scripts/diag_drift.py) | 环境与 checkpoint、数据使用相同 H1 约定 |
 | [scripts/data/filter_bones_seed.py](../scripts/data/filter_bones_seed.py) | 原过滤器按 G1 资产设计，H1 需重新检查脚部几何、限位和可行性阈值 |
 
-过滤器、推力测试和媒体脚本不是完成首个训练更新的前置条件；需要使用它们时再完成对应适配。不能因为它们暂时未调用，就宣称仓库所有功能已支持 H1。
+本次完整迁移已同步处理过滤器、推力测试和媒体脚本；训练及评测链路的实际检查范围见实施说明。过滤阈值和策略效果仍需用更完整的 H1 数据评估。
 
 建议在 checkpoint 配置中记录 `robot="h1"`、关节顺序和模型版本/哈希，并在加载时校验。现有 `resume` 不能自动把 G1 checkpoint 转换成 H1；启动 H1 新训练时使用新的 run_name，不传 G1 的 `--resume`。
 
@@ -1110,34 +1102,34 @@ env -u PYTHONPATH uv run sm-train \
 <a id="step-17"></a>
 ## 17. 逐文件完成清单
 
-这份清单按实际实施进度标记；目前只完成第五章之前的准备工作。
+这份清单按本次 H1 专用实现标记；详细验证结果见实施说明。
 
 | 状态 | 文件或模块 | 必须处理的内容 |
 |---|---|---|
 | [x] | 新增 `h1_data/h1_training.xml` | 独立训练资产、19 实际关节；停用定义均保留为注释 |
 | [x] | 新增 `scripts/data/prepare_h1_asset.py` | 可复现地生成并检查资产，不覆盖已有文件 |
-| [x] | 新增 `robot_dimensions.py` | 已建立尺寸、拆分长度与观测项定义，尚未接入训练模块 |
-| [x] | 新增 `robots/__init__.py`、`robots/h1.py` | loader、顺序、姿态、配置代码完成；mjlab 实体构建尚待验证 |
-| [ ] | `envs/tracking_env_cfg.py` | H1 配置、动作 scale、12 个跟踪 body、脚部正则 |
-| [ ] | `envs/state_io.py` | NQ、NV、STATE_DIM |
-| [ ] | `envs/sim_context.py` | XI_DIM、脚摩擦读取 |
-| [ ] | `data/recorder.py` | 缓存动作维度、终止 zeros_a、默认脚部正则 |
-| [ ] | `world_model/state_spec.py` | NJ、状态/增量拆分、xi 归一化 |
-| [ ] | `world_model/dynamics.py` | 动力学输入输出尺寸 |
-| [ ] | `world_model/world_model.py` | 显式传入尺寸 |
-| [ ] | `world_model/heads.py` | 观测布局、bias 切片、FK 输入、关节奖励切片 |
-| [ ] | `policy/nets.py` | goal scale、Decoder、Critic |
-| [ ] | `imagination/rollout.py` | 观测噪声向量 |
-| [ ] | `training/loop.py` | goal_dim、历史/目标同步、H1 FK、Critic 参数 |
-| [ ] | `data/motion_convert.py` | H1 CSV 布局、loader、名称元数据 |
-| [ ] | `scripts/data/csv_to_npz_batch.py` | worker 加载 H1 |
-| [ ] | `envs/mdp/motion_library.py` | 状态布局、属性切片、compact FK、逐文件数据校验 |
-| [ ] | `scripts/data/build_library.py` | H1 元数据、维度检查、新输出文件 |
-| [ ] | H1 NPZ 数据 | 名称/顺序/坐标约定确认，50 Hz，正确 FK |
-| [ ] | FK 和解析头测试 | 与 MuJoCo/环境一致，梯度有限 |
-| [ ] | 环境与经验池测试 | shape、重置终止、连续窗口、标签时序 |
-| [ ] | 单次完整训练更新 | WM、Actor、Critic 更新成功 |
-| [ ] | checkpoint 加载与评测 | H1 身份和形状检查，重新加载可运行 |
+| [x] | 新增 `robot_dimensions.py` | 尺寸、拆分长度与观测项定义已接入训练模块 |
+| [x] | 新增 `robots/__init__.py`、`robots/h1.py` | loader、顺序、姿态、配置代码完成；mjlab 实体已验证 |
+| [x] | `envs/tracking_env_cfg.py` | H1 配置、动作 scale、12 个跟踪 body、脚部正则 |
+| [x] | `envs/state_io.py` | NQ、NV、STATE_DIM |
+| [x] | `envs/sim_context.py` | XI_DIM、脚摩擦读取 |
+| [x] | `data/recorder.py` | 缓存动作维度、终止 zeros_a、默认脚部正则 |
+| [x] | `world_model/state_spec.py` | NJ、状态/增量拆分、xi 归一化 |
+| [x] | `world_model/dynamics.py` | 动力学输入输出尺寸 |
+| [x] | `world_model/world_model.py` | 显式传入尺寸 |
+| [x] | `world_model/heads.py` | 观测布局、bias 切片、FK 输入、关节奖励切片 |
+| [x] | `policy/nets.py` | goal scale、Decoder、Critic |
+| [x] | `imagination/rollout.py` | 观测噪声向量 |
+| [x] | `training/loop.py` | goal_dim、历史/目标同步、H1 FK、Critic 参数 |
+| [x] | `data/motion_convert.py` | H1 CSV 布局、loader、名称元数据 |
+| [x] | `scripts/data/csv_to_npz_batch.py` | worker 加载 H1 |
+| [x] | `envs/mdp/motion_library.py` | 状态布局、属性切片、compact FK、逐文件数据校验 |
+| [x] | `scripts/data/build_library.py` | H1 元数据、维度检查、新输出文件 |
+| [x] | H1 NPZ 数据 | 名称/顺序/坐标约定确认，50 Hz，正确 FK |
+| [x] | FK 和解析头测试 | 与 MuJoCo/环境一致，梯度有限 |
+| [x] | 环境与经验池测试 | shape、重置终止、连续窗口、标签时序 |
+| [x] | 单次完整训练更新 | WM、Actor、Critic 更新成功 |
+| [x] | checkpoint 加载与评测 | H1 身份和形状检查，重新加载可运行 |
 
 迁移后的搜索建议：
 
@@ -1168,10 +1160,6 @@ RobotSpec 的身份和关节顺序需要写入 NPZ、packed library 与 checkpoi
 
 ## 验证记录
 
-编写本文时实际完成：核对相关源码与调用位置；原 H1 XML 的 CPU 编译；在内存中清理占位关节、场景、执行器、传感器和 keyframe 后再次编译，确认 nq=26、nv=25、nu=0、20 个机器人 body；核对两个本机 H1 NPZ 的字段和形状。
+早期资产阶段验证了原 XML 的关节、body 和停用定义；现在已安装完整项目环境并完成 H1 训练链路接入。CPU FK、GPU 仿真、经验池、解析奖励/观测/终止、compact 动作库和包含 32 步 BPTT 的短训练均已执行。
 
-文档首次编写时检查过本地文件链接、行号范围和代码语法，并在临时目录验证资产生成与模型加载示例。
-
-第 2～4 章实施后已检查：Python 语法和 CPU 导入；训练模型 nq=26、nv=25、nu=0；19 个关节顺序；默认角度与原 home 一致且在限位内；PD 参数表覆盖与原 motor 力矩上限一致；骨架、惯量、关节轴和几何未改变；原停用定义仍在注释中；每次返回独立 MjSpec；生成脚本兼容未注释的原始输入，拒绝覆盖已有资产；加载器拒绝错误关节顺序。
-
-验证输入和输出放在自动清理的临时目录，完成后已清理，没有新增仓库测试文件或字节码。未安装 mjlab，因此没有运行 EntityCfg 实体构建。第 5 章及后续环境接入、网络改造、控制参数联调、NPZ 适配、GPU 训练与 checkpoint 重载仍未执行。
+本次改动和最新逐项结果统一记录于 [H1迁移完成与训练说明](H1迁移完成与训练说明.md)，本机依赖信息见 [本机环境使用说明](本机环境使用说明.md)。验证使用临时目录，保留正式训练动作，清理临时测试产物。

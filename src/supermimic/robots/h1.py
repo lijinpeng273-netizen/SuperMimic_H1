@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 H1_XML = Path(__file__).resolve().parents[3] / "h1_data/h1_training.xml"
 
 # 与整理后的 XML 关节树顺序一致，不沿用原 motor 通道排列。
+# 关节顺序：左腿 5、右腿 5、腰部 1、左臂 4、右臂 4，共 19 个关节。
 H1_JOINT_NAMES = (
     "left_hip_yaw_joint",
     "left_hip_roll_joint",
@@ -83,10 +84,10 @@ effort_limit: list[float] = [
     *[40.0, 40.0, 18.0, 18.0],  # 右臂
 ]
 
-
+# 加载已编译模型
 def load_h1_model(xml_path: str | Path | None = None) -> mujoco.MjModel:
     """加载 CPU 模型，用于数据转换/FK，并检查关节类型和顺序。"""
-    model = mujoco.MjModel.from_xml_path(str(xml_path or H1_XML))
+    model = mujoco.MjModel.from_xml_path(str(xml_path or H1_XML))   # xml文件的路径，下面三个if语句是对模型的检查
     if model.njnt != NJ + 1 or model.jnt_type[0] != mujoco.mjtJoint.mjJNT_FREE:
         raise ValueError("H1 应包含一个根部 free joint 和 19 个实际关节。")
     names = tuple(model.joint(i).name for i in range(1, model.njnt))
@@ -104,13 +105,34 @@ def get_h1_spec() -> mujoco.MjSpec:
     return mujoco.MjSpec.from_file(str(H1_XML))
 
 
+def foot_sole_height(model: mujoco.MjModel, data: mujoco.MjData) -> float:
+    """Lowest world Z of the two H1 foot collision meshes after mj_kinematics.
+
+    Unlike G1's capsules, H1 uses meshes. MuJoCo's compiled mesh vertices and
+    geom_xmat/geom_xpos include the mesh's principal-axis transformation.
+    """
+    import numpy as np
+
+    heights = []
+    for side in ("left", "right"):
+        geom = model.geom(f"{side}_ankle_link_collision").id
+        if model.geom_type[geom] != mujoco.mjtGeom.mjGEOM_MESH:
+            raise ValueError("Expected an H1 foot collision mesh")
+        mesh = model.geom_dataid[geom]
+        first, count = model.mesh_vertadr[mesh], model.mesh_vertnum[mesh]
+        vertices = model.mesh_vert[first:first + count]
+        rotation = data.geom_xmat[geom].reshape(3, 3)
+        heights.append(np.min(vertices @ rotation[2] + data.geom_xpos[geom, 2]))
+    return float(min(heights))
+
+# 定义机器人资产来源，初始状态和控制参数
 def get_h1_robot_cfg() -> EntityCfg:
     """构造独立的 H1 配置，避免多个环境配置之间共享可变实例。"""
     from mjlab.actuator import BuiltinPositionActuatorCfg
     from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
     actuators = []
-    for name, kp, kd, effort in zip(
+    for name, kp, kd, effort in zip(    # 创建一个空列表，收集每一个关节的控制器配置
         H1_JOINT_NAMES, stiffness, damping, effort_limit, strict=True
     ):
         actuators.append(

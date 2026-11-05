@@ -13,11 +13,12 @@ def main(num_envs: int = 4096, steps: int = 300, warmup: int = 50, record: bool 
     from supermimic.envs import SuperMimicEnvCfgArgs, make_env
     from supermimic.envs.mdp.motion_library import discover_npz
 
-    files = discover_npz(Path("data/npz/lafan1"), limit=clips)
+    files = discover_npz(Path("data/npz/h1"), limit=clips)
     args = SuperMimicEnvCfgArgs(npz_files=[str(f) for f in files], num_envs=num_envs, record_transitions=record)
     env = make_env(args)
     env.reset()
-    act = torch.zeros(num_envs, 29, device=env.device)
+    # Original G1 action size was 29.
+    act = torch.zeros(num_envs, env.action_manager.total_action_dim, device=env.device)
     for _ in range(warmup):
         env.step(act)
     torch.cuda.synchronize()

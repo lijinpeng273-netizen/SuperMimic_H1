@@ -4,7 +4,7 @@ Exposes the same attribute API as mjlab's ``MotionCommand`` (``anchor_pos_w``,
 ``robot_body_pos_w``, ``body_pos_relative_w`` ...) so mjlab's tracking reward
 functions work unchanged, plus:
 
-* ``goal``        (N, K*68) future-frame goal features (plan D5)
+* ``goal``        (N, K*48) future-frame goal features (plan D5)
 * ``root_*``      reference pelvis quantities for the paper's root terminations
 * ``clip_end``    (N,) True once the clip's last frame has been reached (time-out)
 * return-based reset sampling over 1 s bins of the whole library (plan D14)

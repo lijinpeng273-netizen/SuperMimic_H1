@@ -1,6 +1,6 @@
 """Train SuperMimic.  Example:
 
-  uv run sm-train --run-name e1_walk --data.clips walk1_subject1 --env.num-envs 1024
+  uv run sm-train --run-name h1 --data.clips default_pose_150frames --env.num-envs 32
 """
 
 from __future__ import annotations
@@ -44,7 +44,13 @@ def main() -> None:
     cfg = tyro.cli(TrainConfig)
     from supermimic.training.loop import Trainer
 
-    Trainer(cfg).run()
+    trainer = Trainer(cfg)
+    try:
+        trainer.run()
+    finally:
+        trainer.env.close()
+        if trainer.writer is not None:
+            trainer.writer.close()
 
 
 if __name__ == "__main__":

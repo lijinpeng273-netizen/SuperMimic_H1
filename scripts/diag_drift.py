@@ -1,7 +1,7 @@
 """Drift diagnostic: how fast does a policy's global root pose drift from the reference over whole clips,
 and how much of the world-frame velocity error is just that drift (yaw misalignment)?
 
-  uv run python scripts/diag_drift.py --ckpt logs/e7/ckpt_0020000.pt --npz-dir data/npz/lafan1
+  uv run python scripts/diag_drift.py --ckpt logs/e7/ckpt_0020000.pt --npz-dir data/npz/h1
 
 Same deterministic protocol as eval_benchmark (first frame start, no noise/DR). Each clip plays once in
 its own env. Reports per-clip and aggregate:
@@ -31,12 +31,12 @@ def _yaw(q: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def main(ckpt: Path, npz_dir: Path = Path("data/npz/lafan1"), clips: list[str] | None = None, device: str = "cuda:0", out: Path | None = None) -> None:
+def main(ckpt: Path, npz_dir: Path = Path("data/npz/h1"), clips: list[str] | None = None, device: str = "cuda:0", out: Path | None = None) -> None:
     files = [str(f) for f in discover_npz(npz_dir, names=clips)]
     policy, cfg = load_policy_from_checkpoint(ckpt, device)
     n = len(files)
     args = SuperMimicEnvCfgArgs(
-        npz_files=files, num_envs=n, future_frames=cfg["env"]["future_frames"], episode_length_s=1.0e5,
+        npz_files=files, num_envs=n, future_frames=cfg["env"]["future_frames"], history_length=policy.cfg.history, episode_length_s=1.0e5,
         action_noise_std=0.0, obs_noise=False, reset_noise=False, domain_randomization=False,
         sampling_mode="start", record_transitions=False, seed=0, anchor_obs=cfg["env"].get("anchor_obs", False),
     )

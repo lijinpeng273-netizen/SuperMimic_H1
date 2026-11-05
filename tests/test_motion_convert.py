@@ -4,12 +4,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from supermimic.robot_dimensions import NJ, NQ
 
 from supermimic.data.motion_convert import (
-    G1_JOINT_NAMES,
+    H1_JOINT_NAMES,
     forward_kinematics,
     load_csv,
-    load_g1_model,
+    load_h1_model,
     quat_rotate_inverse,
     resample_motion,
 )
@@ -18,7 +19,21 @@ ROOT = Path(__file__).resolve().parents[1]
 LAFAN = ROOT / "data/raw/lafan1/g1"
 CLIP = LAFAN / "walk1_subject1.csv"
 
-pytestmark = pytest.mark.skipif(not CLIP.exists(), reason="LAFAN1 G1 CSVs not downloaded")
+# pytestmark = pytest.mark.skipif(not CLIP.exists(), reason="LAFAN1 G1 CSVs not downloaded")
+
+
+@pytest.fixture(autouse=True)
+def h1_csv(tmp_path, monkeypatch):
+    """Small deterministic H1 signal; pytest's temporary directory owns the CSV."""
+    from supermimic.robots.h1 import default_pos
+    import sys
+    t = np.arange(400) / 30.
+    pos = np.c_[0.1*t, np.zeros_like(t), np.ones_like(t)]
+    quat = np.c_[np.zeros_like(t), np.zeros_like(t), np.sin(.01*t), np.cos(.01*t)]
+    joints = np.array(default_pos)[None] + .02*np.sin(t[:, None] + np.arange(NJ)[None])
+    path = tmp_path / "h1.csv"
+    np.savetxt(path, np.c_[pos, quat, joints], delimiter=",")
+    monkeypatch.setattr(sys.modules[__name__], "CLIP", path)
 
 
 def _signed_quat_close(q, q_ref, atol):
@@ -64,12 +79,12 @@ def test_resample_matches_mjlab_motion_loader():
 
 def test_fk_root_velocities_round_trip():
     """Root link velocity from cvel must equal the velocity we wrote (as mjlab asserts)."""
-    model = load_g1_model()
+    model = load_h1_model()
     motion = resample_motion(load_csv(CLIP)[:200], 30, 50)
     bodies = forward_kinematics(model, motion)
     T = motion.num_frames
-    assert bodies.pos_w.shape == (T, 30, 3) and bodies.quat_w.shape == (T, 30, 4)
-    assert bodies.body_names[0] == "pelvis" and len(bodies.body_names) == 30
+    assert bodies.pos_w.shape == (T, 20, 3) and bodies.quat_w.shape == (T, 20, 4)
+    assert bodies.body_names[0] == "pelvis" and len(bodies.body_names) == 20
     np.testing.assert_allclose(np.linalg.norm(bodies.quat_w, axis=-1), 1.0, atol=1e-9)
     np.testing.assert_allclose(bodies.pos_w[:, 0], motion.root_pos, atol=1e-9)
     _signed_quat_close(bodies.quat_w[:, 0], motion.root_quat, atol=1e-9)
@@ -81,7 +96,7 @@ def test_fk_matches_mj_forward_and_finite_difference():
     """Kinematics-only FK equals full mj_forward, and body velocities match position differences."""
     import mujoco
 
-    model = load_g1_model()
+    model = load_h1_model()
     motion = resample_motion(load_csv(CLIP)[:200], 30, 50)
     bodies = forward_kinematics(model, motion)
     data = mujoco.MjData(model)
@@ -95,7 +110,7 @@ def test_fk_matches_mj_forward_and_finite_difference():
     mujoco.mj_forward(model, data)
     np.testing.assert_allclose(data.xpos[1:], bodies.pos_w[t], atol=1e-9)
     # mj_objectVelocity gives the 6D velocity at the body frame origin in world coordinates.
-    for b in (1, 10, 20, 30):
+    for b in (1, 5, 10, 20):
         res = np.zeros(6)
         mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_XBODY, b, res, 0)  # frame origin, not COM
         np.testing.assert_allclose(res[3:], bodies.lin_vel_w[t, b - 1], atol=1e-8)
@@ -107,4 +122,4 @@ def test_fk_matches_mj_forward_and_finite_difference():
 
 
 def test_joint_names_order():
-    assert len(G1_JOINT_NAMES) == 29 and G1_JOINT_NAMES[0] == "left_hip_pitch_joint"
+    assert len(H1_JOINT_NAMES) == NJ and H1_JOINT_NAMES[0] == "left_hip_yaw_joint"

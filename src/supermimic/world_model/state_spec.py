@@ -1,24 +1,24 @@
-"""State representation for the world model (plan D1–D3).
+"""State representation for the world model (plan D1–D3). 世界模型的状态表示
 
-Simulator state  s = [root_pos(3), root_quat wxyz(4), joint_pos(29), root_lin_vel_w(3),
-                      root_ang_vel_b(3), joint_vel(29)]            (71, MuJoCo layout, origin-free)
+Simulator state  s = [root_pos(3), root_quat wxyz(4), joint_pos(19), root_lin_vel_w(3),
+                      root_ang_vel_b(3), joint_vel(19)]            (51, MuJoCo layout, origin-free)
 
-Canonical features (network input, heading-invariant, 71):
+Canonical features (network input, heading-invariant, 51):
     [root_z(1), rot6d(heading^-1 ⊗ root_quat)(6), root_lin_vel in heading frame(3),
-     root_ang_vel_b(3), joint_pos(29), joint_vel(29)]
+     root_ang_vel_b(3), joint_pos(19), joint_vel(19)]
 
-Network output ``delta`` (70) and the integration step (dt = 0.02 s):
-    dv_h(3), dw_b(3), dqd(29)            velocity increments, heading / body frame
-    dp_h(3), dth_b(3), dq(29)            position corrections on top of explicit integration
+Network output ``delta`` (50) and the integration step (dt = 0.02 s):
+    dv_h(3), dw_b(3), dqd(19)            velocity increments, heading / body frame
+    dp_h(3), dth_b(3), dq(19)            position corrections on top of explicit integration
     v'  = v + R_h dv_h               w' = w + dw_b          qd' = qd + dqd
     p'  = p + dt v' + R_h dp_h       q' = q ⊗ exp(dt w' + dth_b)    qj' = qj + dt qd' + dq
 With zero output the model extrapolates at constant velocity (a physical prior); the
 last layer of the dynamics MLP is zero-initialised so training starts from it.
 
 Loss / error normalisation (D3): per-quantity nominal scales sigma applied to the
-70-d error vector [dp(3), rotvec(3), dv(3), dw(3), dq(29), dqd(29)].
+50-d error vector [dp(3), rotvec(3), dv(3), dw(3), dq(19), dqd(19)].
 """
-
+# 该文件负责定义世界模型怎样理解机器人状态、怎样更新状态，以及怎样衡量预测误差。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -36,15 +36,14 @@ from supermimic.kinematics.rotations import (
     rot6d_from_quat,
     rotvec_from_quat,
 )
-
-STATE_DIM = 71
-FEAT_DIM = 71
-DELTA_DIM = 70
-NJ = 29
+# 导入维度常量
+from supermimic.robot_dimensions import (
+    NJ, STATE_DIM, FEAT_DIM, DELTA_DIM, STATE_SIZES, DELTA_SIZES,
+)
 
 
 @dataclass
-class StateSpecCfg:
+class StateSpecCfg: # 定义状态规范的配置参数（各种步长和缩放参数）
     dt: float = 0.02
     # Nominal error scales (D3) for [root pos m, root rotvec rad, root lin vel m/s, root ang vel rad/s, joint pos rad, joint vel rad/s].
     err_scale: tuple[float, ...] = (0.05, 0.1, 0.5, 1.0, 0.1, 2.0)
@@ -53,9 +52,9 @@ class StateSpecCfg:
     # Input feature scales for [root_z, rot6d, lin_vel_h, ang_vel_b, joint_pos, joint_vel] (divide by these).
     in_scale: tuple[float, ...] = (1.0, 1.0, 1.0, 2.0, 1.0, 5.0)
     explicit_integration: bool = True
-    # xi normalisation: (offset, scale) for friction, encoder bias, com offset.
-    xi_offset: tuple[float, ...] = field(default_factory=lambda: (0.75,) + (0.0,) * 29 + (0.0,) * 3)
-    xi_scale: tuple[float, ...] = field(default_factory=lambda: (0.45,) + (0.01,) * 29 + (0.05,) * 3)
+    # xi normalisation: (offset, scale) for friction, encoder bias, com offset. 在这个基础上进行额外的归一化处理
+    xi_offset: tuple[float, ...] = field(default_factory=lambda: (0.75,) + (0.0,) * NJ + (0.0,) * 3)
+    xi_scale: tuple[float, ...] = field(default_factory=lambda: (0.45,) + (0.01,) * NJ + (0.05,) * 3)
 
 
 class StateSpec:
@@ -72,11 +71,12 @@ class StateSpec:
     # ------------------------------------------------------------------ split / features
 
     @staticmethod
-    def split(s: torch.Tensor):
-        return s[..., 0:3], s[..., 3:7], s[..., 7:36], s[..., 36:39], s[..., 39:42], s[..., 42:71]
+    def split(s: torch.Tensor): # 将状态张量拆分为各个组成部分
+        # return s[..., 0:3], s[..., 3:7], s[..., 7:36], s[..., 36:39], s[..., 39:42], s[..., 42:71]
+        return torch.split(s, STATE_SIZES, dim=-1)  # 拆分为共51维的6个部分：根位置、根四元数、关节位置、根线速度、根角速度、关节速度
 
     def canonical(self, s: torch.Tensor) -> torch.Tensor:
-        """Heading-invariant, scaled network input features (…, 71)."""
+        """Heading-invariant, scaled network input features (…, 51)."""
         p, q, qj, v, w, qd = self.split(s)
         q = quat_normalize(q)
         hq = heading_quat(q)
@@ -89,35 +89,35 @@ class StateSpec:
         return (xi - self.xi_offset) / self.xi_scale
 
     # ------------------------------------------------------------------ integration
-
+    # 它接收当前状态 s 和动力学网络输出 delta，生成预测的下一状态
     def integrate(self, s: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
-        """Apply the (unscaled) network output ``delta`` (…, 70) to state ``s`` (…, 71)."""
-        d = delta * self.out_scale
-        dv_h, dw_b, dqd, dp_h, dth_b, dq = d[..., 0:3], d[..., 3:6], d[..., 6:35], d[..., 35:38], d[..., 38:41], d[..., 41:70]
-        p, q, qj, v, w, qd = self.split(s)
+        """Apply the (unscaled) network output ``delta`` (…, 50) to state ``s`` (…, 51)."""
+        d = delta * self.out_scale  # 网络输出转换成实际物理增量
+        dv_h, dw_b, dqd, dp_h, dth_b, dq = torch.split(d, DELTA_SIZES, dim=-1)  # 网络输出拆分为速度增量和位置增量
+        p, q, qj, v, w, qd = self.split(s)  # 读取当前状态及朝向
         q = quat_normalize(q)
         hq = heading_quat(q)
-        v_new = v + quat_apply(hq, dv_h)
+        v_new = v + quat_apply(hq, dv_h)    # 更新速度：将局部速度增量 dv_h 转换到世界坐标系下，并加到当前速度 v 上
         w_new = w + dw_b
         qd_new = qd + dqd
-        dt = self.dt if self.cfg.explicit_integration else 0.0
-        p_new = p + dt * v_new + quat_apply(hq, dp_h)
-        q_new = quat_normalize(quat_mul(q, quat_from_rotvec(dt * w_new + dth_b)))
-        qj_new = qj + dt * qd_new + dq
+        dt = self.dt if self.cfg.explicit_integration else 0.0  # 角速度增量与现有角速度都在根部坐标系中，可以直接相加
+        p_new = p + dt * v_new + quat_apply(hq, dp_h)   # 更新根部位置
+        q_new = quat_normalize(quat_mul(q, quat_from_rotvec(dt * w_new + dth_b)))   # 更新根部姿态
+        qj_new = qj + dt * qd_new + dq  # 更新关节位置
         return torch.cat([p_new, q_new, qj_new, v_new, w_new, qd_new], dim=-1)
 
     # ------------------------------------------------------------------ errors
-
+    # 用于比较预测状态和真实状态之间的误差，计算归一化的误差向量和平方误差
     def error_vector(self, s_pred: torch.Tensor, s_true: torch.Tensor) -> torch.Tensor:
-        """Normalised 70-d error [dp, rotvec, dv, dw, dq, dqd] / sigma."""
+        """Normalised 50-d error [dp, rotvec, dv, dw, dq, dqd] / sigma."""
         p1, q1, qj1, v1, w1, qd1 = self.split(s_pred)
         p2, q2, qj2, v2, w2, qd2 = self.split(s_true)
-        q1 = quat_normalize(q1)
+        q1 = quat_normalize(q1) # 姿态误差处理
         q2 = quat_normalize(q2)
         rot_err = rotvec_from_quat(quat_mul(quat_apply_inverse_quat(q2), q1))
         err = torch.cat([p1 - p2, rot_err, v1 - v2, w1 - w2, qj1 - qj2, qd1 - qd2], dim=-1)
         return err / self.err_scale
-
+    # 归一化误差误差
     def normalized_sq_error(self, s_pred: torch.Tensor, s_true: torch.Tensor) -> torch.Tensor:
         """Mean over dims of the squared normalised error (the reported 'prediction error')."""
         e = self.error_vector(s_pred, s_true)

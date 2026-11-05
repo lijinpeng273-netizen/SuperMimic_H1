@@ -10,7 +10,8 @@ import tyro
 
 
 def main(batch: int = 2048, horizon: int = 32, modes: tuple[str, ...] = ("eager", "default"), reps: int = 3, clips: int = 1) -> None:
-    from supermimic.data.motion_convert import load_g1_model
+    from supermimic.robots.h1 import load_h1_model, default_pos
+    from supermimic.robot_dimensions import NJ, STATE_DIM, XI_DIM
     from supermimic.data.replay_buffer import StartBatch
     from supermimic.envs.mdp.motion_library import MotionLibrary, discover_npz
     from supermimic.envs.tracking_env_cfg import ANCHOR_BODY, ROOT_BODY, TRACKED_BODIES
@@ -24,9 +25,9 @@ def main(batch: int = 2048, horizon: int = 32, modes: tuple[str, ...] = ("eager"
 
     torch.backends.cuda.matmul.allow_tf32 = True
     dev = "cuda:0"
-    model = load_g1_model()
-    files = discover_npz(Path("data/npz/lafan1"), limit=clips)
-    q0 = torch.zeros(29, device=dev)
+    model = load_h1_model()
+    files = discover_npz(Path("data/npz/h1"), limit=clips)
+    q0 = torch.tensor(default_pos, device=dev)
     lib = MotionLibrary(files, TRACKED_BODIES, q0, device=dev)
     fk = G1Kinematics(model, device=dev)
     lim = torch.as_tensor(model.jnt_range[1:], dtype=torch.float32, device=dev)
@@ -35,16 +36,16 @@ def main(batch: int = 2048, horizon: int = 32, modes: tuple[str, ...] = ("eager"
     policy = Policy(PolicyCfg()).to(dev)
 
     # Synthetic start batch from library reference states.
-    f = torch.randint(0, lib.num_frames - 100, (batch,), device=dev)
+    f = torch.randint(0, lib.num_frames, (batch,), device=dev)
     qpos, qvel = lib.ref_qpos_qvel(f)
     s0 = torch.cat([qpos, qvel], -1)
     start = StartBatch(
         state=s0,
-        xi=torch.zeros(batch, 33, device=dev) + torch.tensor([0.75] + [0.0] * 32, device=dev),
+        xi=torch.zeros(batch, XI_DIM, device=dev) + torch.tensor([0.75] + [0.0] * (XI_DIM - 1), device=dev),
         frame=f,
-        prev_action=torch.zeros(batch, 29, device=dev),
-        hist_states=s0[None].expand(10, batch, 71).contiguous(),
-        hist_actions=torch.zeros(10, batch, 29, device=dev),
+        prev_action=torch.zeros(batch, NJ, device=dev),
+        hist_states=s0[None].expand(10, batch, STATE_DIM).contiguous(),
+        hist_actions=torch.zeros(10, batch, NJ, device=dev),
     )
     for mode in modes:
         step_fn = ImagStep(wm, q0, compile_mode=None if mode == "eager" else mode)

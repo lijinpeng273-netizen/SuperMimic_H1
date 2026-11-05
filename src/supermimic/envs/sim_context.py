@@ -1,11 +1,11 @@
-"""Per-environment simulation context xi (plan: 33-d = foot friction 1 + encoder bias 29 + torso COM offset 3)."""
+"""Per-environment simulation context xi (plan: 23-d = foot friction 1 + encoder bias 19 + torso COM offset 3)."""
 
 from __future__ import annotations
 
 import numpy as np
 import torch
 
-XI_DIM = 33
+from supermimic.robot_dimensions import XI_DIM
 
 
 class SimContext:

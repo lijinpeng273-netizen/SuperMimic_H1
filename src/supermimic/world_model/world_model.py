@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from supermimic.world_model.dynamics import MLP, DynamicsMLP
 from supermimic.world_model.heads import AnalyticHeads, ReferenceFrame
 from supermimic.world_model.state_spec import StateSpec, StateSpecCfg
-
+from supermimic.robot_dimensions import FEAT_DIM, ACT_DIM, XI_DIM, DELTA_DIM
 
 @dataclass
 class WorldModelCfg:
@@ -42,7 +42,11 @@ class WorldModel(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.spec = StateSpec(cfg.state_spec, device)
-        self.dynamics = DynamicsMLP(hidden=cfg.hidden)
+        # self.dynamics = DynamicsMLP(feat_dim=FEAT_DIM,act_dim=ACT_DIM,xi_dim=XI_DIM,hidden=cfg.hidden,ut_dim=DELTA_DIM,)
+        self.dynamics = DynamicsMLP(
+            feat_dim=FEAT_DIM, act_dim=ACT_DIM, xi_dim=XI_DIM,
+            hidden=cfg.hidden, out_dim=DELTA_DIM,
+        )
         self.term_head = TerminationHead(cfg.term_hidden, cfg.height_threshold, cfg.tilt_threshold)
         self.heads = heads  # analytic observation / reward / FK (no parameters)
         self.to(device)
@@ -63,7 +67,7 @@ class WorldModel(nn.Module):
     # ------------------------------------------------------------------ Eq. 1
 
     def _loss_step(self, s, a, xi, s_true, done, ref_root_pos, ref_root_quat):
-        """One autoregressive step of Eq. 1: returns (s_next, sq_err (n,70), term_bce (n,), logits (n,))."""
+        """One autoregressive step of Eq. 1: returns (s_next, sq_err (n,50), term_bce (n,), logits (n,))."""
         s_next = self.step(s, a, xi)
         e = self.spec.error_vector(s_next, s_true)
         feats = self.heads.termination_features(s_next[..., 0:3], s_next[..., 3:7], ReferenceFrame(None, None, None, None, ref_root_pos, ref_root_quat))
@@ -77,7 +81,7 @@ class WorldModel(nn.Module):
     def window_loss(self, states: torch.Tensor, a_exec: torch.Tensor, xi: torch.Tensor, done: torch.Tensor, refs: list[ReferenceFrame]):
         """k-step autoregressive loss.
 
-        states: (k+1, n, 71) logged states; a_exec: (k, n, 29); xi: (n, 33);
+        states: (k+1, n, 51) logged states; a_exec: (k, n, 19); xi: (n, 23);
         done: (k, n) termination label of states 1..k; refs[j]: reference of transition j (for the
         termination features of state j+1).
         """

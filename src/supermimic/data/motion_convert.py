@@ -1,4 +1,4 @@
-"""CSV (G1 retarget) -> mjlab-compatible motion npz, batch friendly.
+"""CSV (19-joint H1 retarget) -> mjlab-compatible motion npz, batch friendly.
 
 Conventions mirror ``mjlab/scripts/csv_to_npz.py`` (commit 8bb2bc9) exactly, but
 everything is vectorised and the forward kinematics run on CPU MuJoCo instead of a
@@ -7,11 +7,11 @@ GPU Simulation so that hundreds of thousands of clips can be converted in parall
 CSV layout (no header, one row per frame):
   cols 0:3   root position (m)
   cols 3:7   root quaternion in **xyzw** order (converted to wxyz here)
-  cols 7:36  29 joint angles in :data:`G1_JOINT_NAMES` order
+  cols 7:26  19 joint angles in :data:`H1_JOINT_NAMES` order
 
 Output npz keys (same as mjlab ``MotionLoader`` expects):
-  fps, joint_pos (T,29), joint_vel (T,29), body_pos_w (T,30,3), body_quat_w (T,30,4) wxyz,
-  body_lin_vel_w (T,30,3), body_ang_vel_w (T,30,3)
+  fps, joint_pos (T,19), joint_vel (T,19), body_pos_w (T,20,3), body_quat_w (T,20,4) wxyz,
+  body_lin_vel_w (T,20,3), body_ang_vel_w (T,20,3)
 plus extras: joint_names, body_names, source (str), input_fps.
 
 Velocity definitions (as in mjlab):
@@ -32,54 +32,61 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-G1_JOINT_NAMES: tuple[str, ...] = (
-    "left_hip_pitch_joint",
-    "left_hip_roll_joint",
-    "left_hip_yaw_joint",
-    "left_knee_joint",
-    "left_ankle_pitch_joint",
-    "left_ankle_roll_joint",
-    "right_hip_pitch_joint",
-    "right_hip_roll_joint",
-    "right_hip_yaw_joint",
-    "right_knee_joint",
-    "right_ankle_pitch_joint",
-    "right_ankle_roll_joint",
-    "waist_yaw_joint",
-    "waist_roll_joint",
-    "waist_pitch_joint",
-    "left_shoulder_pitch_joint",
-    "left_shoulder_roll_joint",
-    "left_shoulder_yaw_joint",
-    "left_elbow_joint",
-    "left_wrist_roll_joint",
-    "left_wrist_pitch_joint",
-    "left_wrist_yaw_joint",
-    "right_shoulder_pitch_joint",
-    "right_shoulder_roll_joint",
-    "right_shoulder_yaw_joint",
-    "right_elbow_joint",
-    "right_wrist_roll_joint",
-    "right_wrist_pitch_joint",
-    "right_wrist_yaw_joint",
-)
-NUM_JOINTS = len(G1_JOINT_NAMES)
+# G1_JOINT_NAMES: tuple[str, ...] = (
+#     "left_hip_pitch_joint",
+#     "left_hip_roll_joint",
+#     "left_hip_yaw_joint",
+#     "left_knee_joint",
+#     "left_ankle_pitch_joint",
+#     "left_ankle_roll_joint",
+#     "right_hip_pitch_joint",
+#     "right_hip_roll_joint",
+#     "right_hip_yaw_joint",
+#     "right_knee_joint",
+#     "right_ankle_pitch_joint",
+#     "right_ankle_roll_joint",
+#     "waist_yaw_joint",
+#     "waist_roll_joint",
+#     "waist_pitch_joint",
+#     "left_shoulder_pitch_joint",
+#     "left_shoulder_roll_joint",
+#     "left_shoulder_yaw_joint",
+#     "left_elbow_joint",
+#     "left_wrist_roll_joint",
+#     "left_wrist_pitch_joint",
+#     "left_wrist_yaw_joint",
+#     "right_shoulder_pitch_joint",
+#     "right_shoulder_roll_joint",
+#     "right_shoulder_yaw_joint",
+#     "right_elbow_joint",
+#     "right_wrist_roll_joint",
+#     "right_wrist_pitch_joint",
+#     "right_wrist_yaw_joint",
+# )
+# NUM_JOINTS = len(G1_JOINT_NAMES)
+#
+#
+# def g1_xml_path() -> Path:
+#     import mjlab
+#
+#     return Path(mjlab.__file__).parent / "asset_zoo/robots/unitree_g1/xmls/g1.xml"
+#
+#
+# def load_g1_model(xml_path: str | Path | None = None) -> mujoco.MjModel:
+#     """Standalone CPU MjModel of the G1. Asserts the joint order matches the CSV order."""
+#     model = mujoco.MjModel.from_xml_path(str(xml_path or g1_xml_path()))
+#     names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(model.njnt)]
+#     assert model.jnt_type[0] == mujoco.mjtJoint.mjJNT_FREE, "first joint must be the free joint"
+#     assert tuple(names[1:]) == G1_JOINT_NAMES, f"joint order mismatch: {names[1:]}"
+#     assert model.nq == 7 + NUM_JOINTS and model.nv == 6 + NUM_JOINTS
+#     return model
+#
+#
 
+from supermimic.robots.h1 import H1_JOINT_NAMES, load_h1_model
+from supermimic.data.motion_format import robot_metadata, validate_motion
 
-def g1_xml_path() -> Path:
-    import mjlab
-
-    return Path(mjlab.__file__).parent / "asset_zoo/robots/unitree_g1/xmls/g1.xml"
-
-
-def load_g1_model(xml_path: str | Path | None = None) -> mujoco.MjModel:
-    """Standalone CPU MjModel of the G1. Asserts the joint order matches the CSV order."""
-    model = mujoco.MjModel.from_xml_path(str(xml_path or g1_xml_path()))
-    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(model.njnt)]
-    assert model.jnt_type[0] == mujoco.mjtJoint.mjJNT_FREE, "first joint must be the free joint"
-    assert tuple(names[1:]) == G1_JOINT_NAMES, f"joint order mismatch: {names[1:]}"
-    assert model.nq == 7 + NUM_JOINTS and model.nv == 6 + NUM_JOINTS
-    return model
+NUM_JOINTS = len(H1_JOINT_NAMES)
 
 
 # ----------------------------------------------------------------------------- quaternions
@@ -137,10 +144,10 @@ class ResampledMotion:
     fps: float
     root_pos: np.ndarray  # (T,3)
     root_quat: np.ndarray  # (T,4) wxyz
-    joint_pos: np.ndarray  # (T,29)
+    joint_pos: np.ndarray  # (T,19)
     root_lin_vel_w: np.ndarray  # (T,3) world
     root_ang_vel_w: np.ndarray  # (T,3) world
-    joint_vel: np.ndarray  # (T,29)
+    joint_vel: np.ndarray  # (T,19)
 
     @property
     def num_frames(self) -> int:
@@ -158,23 +165,23 @@ def csv_format(path: str | Path) -> str:
 
 
 def load_csv(path: str | Path) -> np.ndarray:
-    """Load a G1 retarget CSV in either format. Returns float64 (N, 36) in the LAFAN1 layout:
-    root position (m), root quaternion **xyzw**, 29 joint angles (rad) in G1_JOINT_NAMES order."""
+    """Load an H1 retarget CSV in either format. Returns float64 (N, 26) in the LAFAN1 layout:
+    root position (m), root quaternion **xyzw**, 19 joint angles (rad) in H1_JOINT_NAMES order."""
     import pandas as pd
 
     if csv_format(path) == "bones":
-        # BONES-SEED G1 CSV (same parsing as SONIC's convert_soma_csv_to_motion_lib.py):
+        # H1 CSV with BONES-style headers (same parsing as SONIC's convert_soma_csv_to_motion_lib.py):
         # centimeters -> metres, Euler 'xyz' degrees -> quaternion, joint degrees -> radians.
         df = pd.read_csv(path)
         cols = list(df.columns)
         joint_cols = [c for c in cols if c.endswith("_joint_dof")]
-        expected = [f"{n}_dof" for n in G1_JOINT_NAMES]
-        if joint_cols != expected:
-            raise ValueError(f"{path}: joint columns differ from G1 order: {joint_cols[:5]}...")
+        expected = [f"{n}_dof" for n in H1_JOINT_NAMES]
+        if len(joint_cols) != NUM_JOINTS or set(joint_cols) != set(expected):
+            raise ValueError(f"{path}: joint columns do not match the H1 joint names: {joint_cols[:5]}...")
         pos = df[["root_translateX", "root_translateY", "root_translateZ"]].to_numpy(np.float64) / 100.0
         eul = df[["root_rotateX", "root_rotateY", "root_rotateZ"]].to_numpy(np.float64)
         quat_xyzw = Rotation.from_euler("xyz", eul, degrees=True).as_quat()
-        joints = np.deg2rad(df[joint_cols].to_numpy(np.float64))
+        joints = np.deg2rad(df[expected].to_numpy(np.float64))
         arr = np.concatenate([pos, quat_xyzw, joints], axis=1)
     else:
         arr = pd.read_csv(path, header=None, dtype=np.float64).to_numpy()
@@ -185,6 +192,13 @@ def load_csv(path: str | Path) -> np.ndarray:
 
 def resample_motion(raw: np.ndarray, input_fps: float, output_fps: float) -> ResampledMotion:
     """Resample a raw CSV array to ``output_fps`` and compute velocities (mjlab conventions)."""
+    raw = np.asarray(raw, dtype=np.float64)
+    if raw.ndim != 2 or raw.shape[1] != 7 + NUM_JOINTS or len(raw) < 1 or not np.isfinite(raw).all():
+        raise ValueError(f"Expected nonempty finite H1 array (T, {7 + NUM_JOINTS}), got {raw.shape}")
+    if not np.isfinite([input_fps, output_fps]).all() or min(input_fps, output_fps) <= 0:
+        raise ValueError("Frame rates must be finite and positive")
+    if (np.linalg.norm(raw[:, 3:7], axis=-1) < 1e-8).any():
+        raise ValueError("Root quaternion cannot have zero norm")
     input_dt = 1.0 / input_fps
     output_dt = 1.0 / output_fps
     n_in = raw.shape[0]
@@ -312,26 +326,11 @@ def convert_csv_to_npz(
     model: mujoco.MjModel | None = None,
 ) -> dict:
     """Convert one CSV to an mjlab-compatible npz. Returns a small summary dict."""
-    model = model or load_g1_model()
+    # model = model or load_g1_model()
+    model = model or load_h1_model()
     raw = load_csv(csv_path)
     motion = resample_motion(raw, input_fps, output_fps)
-    bodies = forward_kinematics(model, motion)
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        out_path,
-        fps=np.array([output_fps], dtype=np.float32),
-        joint_pos=motion.joint_pos.astype(np.float32),
-        joint_vel=motion.joint_vel.astype(np.float32),
-        body_pos_w=bodies.pos_w.astype(np.float32),
-        body_quat_w=bodies.quat_w.astype(np.float32),
-        body_lin_vel_w=bodies.lin_vel_w.astype(np.float32),
-        body_ang_vel_w=bodies.ang_vel_w.astype(np.float32),
-        joint_names=np.array(G1_JOINT_NAMES),
-        body_names=np.array(bodies.body_names),
-        source=np.array(str(csv_path)),
-        input_fps=np.array([input_fps], dtype=np.float32),
-    )
+    save_motion_npz(out_path, motion, model=model, source=str(csv_path), input_fps=input_fps)
     return {
         "source": str(csv_path),
         "out": str(out_path),
@@ -339,3 +338,43 @@ def convert_csv_to_npz(
         "output_frames": motion.num_frames,
         "duration_s": (motion.num_frames - 1) / output_fps,
     }
+
+
+def save_motion_npz(out_path: str | Path, motion: ResampledMotion, *, model=None,
+                    source: str = "", input_fps: float | None = None) -> None:
+    """Recompute link states with this H1 asset and write a self-identifying clip."""
+    model = model or load_h1_model()
+    if model.nq != 7 + NUM_JOINTS or tuple(model.joint(i).name for i in range(1, model.njnt)) != H1_JOINT_NAMES:
+        raise ValueError("Motion conversion requires the H1 model in H1_JOINT_NAMES order")
+    bodies = forward_kinematics(model, motion)
+    payload = dict(
+        **robot_metadata(), fps=np.array([motion.fps], np.float32),
+        joint_pos=motion.joint_pos.astype(np.float32), joint_vel=motion.joint_vel.astype(np.float32),
+        body_pos_w=bodies.pos_w.astype(np.float32), body_quat_w=bodies.quat_w.astype(np.float32),
+        body_lin_vel_w=bodies.lin_vel_w.astype(np.float32), body_ang_vel_w=bodies.ang_vel_w.astype(np.float32),
+        body_names=np.array(bodies.body_names), source=np.array(source),
+        input_fps=np.array([input_fps if input_fps is not None else motion.fps], np.float32),
+    )
+    validate_motion(payload, out_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(out_path, **payload)
+
+# Original G1 NPZ writer, retained for migration reference:
+#     bodies = forward_kinematics(model, motion)
+#     out_path = Path(out_path)
+#     out_path.parent.mkdir(parents=True, exist_ok=True)
+#     np.savez(
+#         out_path,
+#         fps=np.array([output_fps], dtype=np.float32),
+#         joint_pos=motion.joint_pos.astype(np.float32),
+#         joint_vel=motion.joint_vel.astype(np.float32),
+#         body_pos_w=bodies.pos_w.astype(np.float32),
+#         body_quat_w=bodies.quat_w.astype(np.float32),
+#         body_lin_vel_w=bodies.lin_vel_w.astype(np.float32),
+#         body_ang_vel_w=bodies.ang_vel_w.astype(np.float32),
+#         joint_names=np.array(G1_JOINT_NAMES),
+#         body_names=np.array(bodies.body_names),
+#         source=np.array(str(csv_path)),
+#         input_fps=np.array([input_fps], dtype=np.float32),
+#     )
