@@ -1,7 +1,7 @@
 <mujoco model="h1">
   <compiler angle="radian" meshdir="meshes/h1" autolimits="true"/>
-
-  <include file="scene.xml"/>
+  <!-- mjlab 会自动创建地面 -->
+  <!-- <include file="scene.xml"/> -->
 
   <default>
     <default class="h1">
@@ -188,14 +188,16 @@
         </body>
       </body>
     </body>
+    <!-- 训练使用 19 个实际关节；占位 body 整段保留为注释。
     <body name="not_use_body" pos="0 0 20">
       <inertial pos="0.0 0.0 0.0" mass="1e-01"
       diaginertia="1e-01 1e-01 1e-01"/>
       <joint name="not_use_joint"/>
     </body>
+    -->
   </worldbody>
 
-<actuator>
+<!-- <actuator>
     <motor class="h1" name="right_hip_roll_joint" joint="right_hip_roll_joint" ctrlrange="-200 200"/>
     <motor class="h1" name="right_hip_pitch_joint" joint="right_hip_pitch_joint" ctrlrange="-200 200"/>
     <motor class="h1" name="right_knee_joint" joint="right_knee_joint" ctrlrange="-300 300"/>
@@ -224,9 +226,9 @@
     <motor class="h1" name="left_shoulder_roll_joint" joint="left_shoulder_roll_joint" ctrlrange="-40 40"/>
     <motor class="h1" name="left_shoulder_yaw_joint" joint="left_shoulder_yaw_joint" ctrlrange="-18 18"/>
     <motor class="h1" name="left_elbow_joint" joint="left_elbow_joint" ctrlrange="-18 18"/>
-  </actuator>
+  </actuator> -->
 
-  <sensor>
+  <!-- <sensor>
     <jointpos name="right_hip_roll_pos" joint="right_hip_roll_joint"/>
     <jointpos name="right_hip_pitch_pos" joint="right_hip_pitch_joint"/>
     <jointpos name="right_knee_pos" joint="right_knee_joint"/>
@@ -296,9 +298,9 @@
 
     <framepos name="frame_pos" objtype="site" objname="imu" />
     <framelinvel name="frame_vel" objtype="site" objname="imu" />
-  </sensor>
+  </sensor> -->
 
-  <keyframe>
+  <!-- <keyframe>
     <key name="home"
       qpos="
     0 0 0.98
@@ -309,5 +311,5 @@
     0 0 0 0
     0 0 0 0
     0"/>
-  </keyframe>
+  </keyframe> -->
 </mujoco>

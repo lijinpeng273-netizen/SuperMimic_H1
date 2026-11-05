@@ -224,7 +224,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
     if a.record_transitions:
         recorders["replay"] = ReplayRecorderCfg(params={"capacity": a.replay_capacity, "foot_geom_regex": FOOT_GEOM_REGEX, "com_body_name": "torso_link"})
 
-    cfg = ManagerBasedRlEnvCfg(
+    cfg = ManagerBasedRlEnvCfg( # 指定使用G1机器人模型，设置环境参数，包括场景、观察、动作、命令、事件、奖励、终止条件、记录器、查看器和模拟配置
         scene=SceneCfg(terrain=TerrainEntityCfg(terrain_type="plane"), num_envs=a.num_envs, entities={"robot": get_g1_robot_cfg()}),
         observations=observations,
         actions=actions,

@@ -53,11 +53,11 @@ class Trainer:
             files = discover_npz(cfg.data.npz_dir, limit=cfg.data.limit, names=cfg.data.clips, manifest=cfg.data.manifest)
         if not files:
             raise FileNotFoundError(f"no clips under {cfg.data.npz_dir}")
-        # 
+        # 创建训练器环境
         self.env = make_env(    
             SuperMimicEnvCfgArgs(
                 npz_files=[str(f) for f in files],
-                num_envs=cfg.env.num_envs,
+                num_envs=cfg.env.num_envs,  # paper: 4096
                 future_frames=cfg.env.future_frames,
                 episode_length_s=cfg.env.episode_length_s,
                 action_noise_std=cfg.env.action_noise_std,
